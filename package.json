@@ -1,0 +1,29 @@
+{
+  "name": "civic_language_bridge_app",
+  "version": "1.0.0",
+  "description": "test sentence",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zeronoids/civic_language_bridge_app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Zeronoids/civic_language_bridge_app/issues"
+  },
+  "homepage": "https://github.com/Zeronoids/civic_language_bridge_app#readme",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.4",
+    "duck-duck-scrape": "^2.2.7",
+    "express": "^5.2.1",
+    "groq-sdk": "^1.6.0",
+    "socket.io": "^4.8.4"
+  }
+}
