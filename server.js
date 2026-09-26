@@ -10,43 +10,69 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 20000, maxRetries: 0 });
 
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// File persistence setup
-const CHAT_FILE = path.join(__dirname, 'chats.json');
-let messageHistory = [];
-
+// Shared saved conversations. CHAT_FILE can point to persistent storage.
+const { randomUUID } = require('crypto');
+const CHAT_FILE = process.env.CHAT_FILE || path.join(__dirname, 'chats.json');
+let chats = [{ id: 'general', title: 'General discussion', messages: [] }];
 if (fs.existsSync(CHAT_FILE)) {
-  try {
-    messageHistory = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8'));
-    console.log(`Loaded ${messageHistory.length} messages from chats.json`);
-  } catch (err) {
-    console.error('Error reading chats.json, initializing empty history:', err);
-    messageHistory = [];
-  }
+  const saved = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8'));
+  if (Array.isArray(saved)) chats[0].messages = saved; // Preserve the original single chat.
+  else if (saved.version === 2 && Array.isArray(saved.chats) && saved.chats.length) chats = saved.chats;
+  else throw new Error('Unsupported chat file; refusing to overwrite it');
 }
-
 function saveHistory() {
-  try {
-    fs.writeFileSync(CHAT_FILE, JSON.stringify(messageHistory, null, 2));
-  } catch (err) {
-    console.error('Failed to save chats to disk:', err);
-  }
+  fs.mkdirSync(path.dirname(CHAT_FILE), { recursive: true });
+  fs.writeFileSync(CHAT_FILE + '.tmp', JSON.stringify({ version: 2, chats }, null, 2));
+  fs.renameSync(CHAT_FILE + '.tmp', CHAT_FILE);
 }
+const chatList = () => chats.map(({ id, title }) => ({ id, title }));
+const queues = new Map();
 
 // WebSocket Handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   // Send prior conversation to newly joined client
-  socket.emit('chat history', messageHistory);
+  socket.emit('chat list', chatList());
+  function joinChat(id) {
+    const chat = chats.find(c => c.id === id);
+    if (!chat) return socket.emit('chat error', 'Chat not found.');
+    if (socket.data.chatId) socket.leave(socket.data.chatId);
+    socket.data.chatId = id;
+    socket.join(id);
+    socket.emit('chat history', { chatId: id, messages: chat.messages });
+  }
+  socket.on('join chat', joinChat);
+  socket.on('create chat', title => {
+    if (typeof title !== 'string' || !title.trim() || title.length > 80) return socket.emit('chat error', 'Use a chat title of 1 to 80 characters.');
+    const chat = { id: randomUUID(), title: title.trim(), messages: [] };
+    chats.push(chat);
+    try { saveHistory(); }
+    catch (error) {
+      chats.pop();
+      console.error(error);
+      return socket.emit('chat error', 'Could not save the new chat.');
+    }
+    io.emit('chat list', chatList());
+    joinChat(chat.id);
+  });
 
-  socket.on('chat message', async (data) => {
-    const author = typeof data === 'object' && data.author ? data.author : 'Participant';
-    const textContent = typeof data === 'object' && data.text ? data.text : String(data);
+  socket.on('chat message', (data) => {
+    if (!data || typeof data.text !== 'string' || !data.text.trim() || data.text.length > 5000) {
+      socket.emit('chat error', 'Messages must contain 1 to 5000 characters.');
+      return;
+    }
+    const chat = chats.find(c => c.id === data.chatId && c.id === socket.data.chatId);
+    if (!chat) return socket.emit('chat error', 'Select a chat before sending.');
+    const author = typeof data.author === 'string' ? data.author.slice(0, 100) : 'Participant';
+    const textContent = data.text.trim();
+    const pending = (queues.get(chat.id) || Promise.resolve()).then(async () => {
+    let outgoing;
 
     try {
       const chatCompletion = await groq.chat.completions.create({
@@ -68,12 +94,13 @@ io.on('connection', (socket) => {
       });
 
       const parsedData = JSON.parse(chatCompletion.choices[0].message.content);
+      if (!parsedData || ['translated', 'tone', 'emoji'].some(key => typeof parsedData[key] !== 'string')) {
+        throw new Error('Invalid mediator response');
+      }
+      parsedData.original = textContent;
       parsedData.author = author;
 
-      messageHistory.push(parsedData);
-      saveHistory(); // Write to chats.json
-      
-      io.emit('chat message', parsedData);
+      outgoing = parsedData;
     } catch (error) {
       console.error('Groq processing error detail:', error);
       const fallback = {
@@ -83,21 +110,31 @@ io.on('connection', (socket) => {
         tone: 'Direct',
         emoji: '💬'
       };
-      messageHistory.push(fallback);
-      saveHistory();
-      io.emit('chat message', fallback);
+      outgoing = fallback;
     }
+    outgoing.id = randomUUID();
+    outgoing.chatId = chat.id;
+    chat.messages.push(outgoing);
+    try { saveHistory(); }
+    catch (error) {
+      chat.messages.pop();
+      socket.emit('chat error', 'Message could not be saved. Please resend it.');
+      throw error;
+    }
+    io.to(chat.id).emit('chat message', outgoing);
+    }).catch(error => console.error('Message processing failed:', error));
+    queues.set(chat.id, pending);
   });
 });
 
 // ElevenLabs Text-to-Speech Route
 app.post('/api/tts', async (req, res) => {
-  const { text, tone } = req.body;
-  if (!text) return res.status(400).send('Text is required');
+  const { text, tone } = req.body || {};
+  if (typeof text !== 'string' || !text.trim() || text.length > 5000) return res.status(400).send('Text is required');
 
   let stability = 0.5;
   let style = 0.0;
-  const lowerTone = (tone || '').toLowerCase();
+  const lowerTone = typeof tone === 'string' ? tone.toLowerCase() : '';
 
   if (lowerTone.includes('frustrated') || lowerTone.includes('angry')) {
     stability = 0.3;
@@ -115,6 +152,7 @@ app.post('/api/tts', async (req, res) => {
   try {
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
       method: 'POST',
+      signal: AbortSignal.timeout(20000),
       headers: {
         'Content-Type': 'application/json',
         'xi-api-key': process.env.ELEVENLABS_API_KEY
@@ -143,14 +181,14 @@ app.post('/api/tts', async (req, res) => {
 
 // LIVE FACT-CHECKING ROUTE (Multilingual Localized Output)
 app.post('/api/factcheck', async (req, res) => {
-  const { claim, targetLang } = req.body;
-  if (!claim) return res.status(400).send('Claim is required');
+  const { claim, targetLang } = req.body || {};
+  if (typeof claim !== 'string' || !claim.trim() || claim.length > 5000) return res.status(400).send('Claim is required');
 
   const language = targetLang || 'en';
 
   try {
     const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(claim)}&utf8=&format=json&origin=*`;
-    const searchRes = await fetch(wikiSearchUrl);
+    const searchRes = await fetch(wikiSearchUrl, { signal: AbortSignal.timeout(10000) });
     const searchJson = await searchRes.json();
 
     const searchResults = (searchJson.query && searchJson.query.search) || [];
@@ -194,9 +232,7 @@ app.post('/api/factcheck', async (req, res) => {
     });
 
     const result = JSON.parse(response.choices[0].message.content);
-    if (!result.sources || result.sources.length === 0) {
-      result.sources = sources;
-    }
+    result.sources = sources; // Only link to references actually retrieved.
 
     res.json(result);
   } catch (err) {
@@ -207,6 +243,9 @@ app.post('/api/factcheck', async (req, res) => {
 
 // CIVIC SUMMARY ROUTE (Structured Multi-Perspective Synthesis)
 app.get('/api/summarize', async (req, res) => {
+  const chat = chats.find(c => c.id === req.query.chatId);
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+  const messageHistory = chat.messages;
   if (messageHistory.length === 0) {
     return res.json({ 
       summary: "No discussion has taken place yet. Send a few messages across different perspectives first!" 
@@ -246,8 +285,10 @@ app.get('/api/summarize', async (req, res) => {
 
 // Dynamic per-user translation endpoint
 app.post('/api/translate', async (req, res) => {
-  const { text, targetLang } = req.body;
-  if (!text || !targetLang || targetLang === 'en') {
+  const { text, targetLang } = req.body || {};
+  if (typeof text !== 'string' || text.length > 5000) return res.status(400).json({ error: 'Invalid text' });
+  if (!['en', 'es', 'fr', 'de', 'zh', 'ar'].includes(targetLang)) return res.status(400).json({ error: 'Invalid language' });
+  if (targetLang === 'en') {
     return res.json({ translated: text });
   }
 

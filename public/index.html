@@ -41,7 +41,7 @@
     .btn-auth.logout { background: #ef4444; }
     .summary-btn { background: #0f172a; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .summary-btn:hover { background: #334155; }
-    
+
     #auth-overlay { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 40px 20px; text-align: center; margin-top: 40px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     #chat-section { display: none; }
 
@@ -64,7 +64,7 @@
     form { display: flex; gap: 8px; }
     input { flex-grow: 1; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 15px; }
     button[type="submit"] { padding: 12px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 600; }
-    
+
     .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; padding: 16px; }
     .modal-content { background: #fff; max-width: 600px; width: 100%; border-radius: 8px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-height: 80vh; overflow-y: auto; }
     .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -105,13 +105,20 @@
       </select>
     </div>
 
+    <div class="user-bar">
+      <label for="chat-select">Saved chats</label>
+      <select id="chat-select" style="flex: 1;"></select>
+      <button type="button" class="btn-auth" id="new-chat">New chat</button>
+    </div>
+    <p class="subtitle">Shared conversations: everyone can access these chats.</p>
     <ul id="messages"></ul>
 
     <form id="chat-form">
-      <input id="message-input" autocomplete="off" placeholder="Share your perspective in your native language..." />
+      <input id="message-input" maxlength="5000" autocomplete="off" placeholder="Share your perspective in your native language..." />
       <button type="button" id="mic-btn" onclick="toggleSpeech()" title="Speak message">🎙️</button>
       <button type="submit">Send</button>
     </form>
+    <p id="speech-status" role="status" aria-live="polite"></p>
   </div>
 
   <!-- Summary Modal -->
@@ -181,6 +188,7 @@
     }
 
     async function logout() {
+      stopSpeech();
       await auth0Client.logout({
         logoutParams: { returnTo: window.location.origin }
       });
@@ -202,98 +210,70 @@
       ar: 'ar-SA'
     };
 
-    function setupRecognition() {
-      if (!SpeechRecognition) return null;
-      
+    function speechStatus(text) {
+      document.getElementById('speech-status').textContent = text;
+    }
+    function stopSpeech() {
+      const previous = recognition;
+      recognition = null; // Ignore delayed callbacks from a stopped session.
+      isRecording = false;
+      if (previous) { try { previous.abort(); } catch (_) {} }
+      const mic = document.getElementById('mic-btn');
+      mic.classList.remove('recording');
+      mic.setAttribute('aria-pressed', 'false');
+      mic.innerText = '\u{1F399}\uFE0F';
+      document.getElementById('message-input').readOnly = false;
+    }
+    function toggleSpeech() {
+      if (!SpeechRecognition) return speechStatus('Speech input is unavailable in this browser. You can still type your message.');
+      if (!window.isSecureContext) return speechStatus('Microphone input requires HTTPS or localhost.');
+      if (isRecording) {
+        // Stop gracefully so the browser can deliver its final transcript.
+        try { recognition.stop(); } catch (_) { stopSpeech(); }
+        return;
+      }
+      const field = document.getElementById('message-input');
+      const prefix = field.value.trim();
       const rec = new SpeechRecognition();
+      recognition = rec;
+      isRecording = true; // Also covers the permission/startup interval.
       rec.continuous = false;
       rec.interimResults = true;
-
+      rec.lang = speechLangMap[document.getElementById('user-lang-select').value] || 'en-US';
+      field.readOnly = true;
+      speechStatus('Starting microphone...');
       rec.onstart = () => {
-        isRecording = true;
-        const micBtn = document.getElementById('mic-btn');
-        const msgInput = document.getElementById('message-input');
-        if (micBtn) {
-          micBtn.classList.add('recording');
-          micBtn.innerText = '🔴';
-        }
-        if (msgInput) {
-          msgInput.placeholder = 'Listening... speak now';
-        }
+        if (recognition !== rec) return;
+        const mic = document.getElementById('mic-btn');
+        mic.classList.add('recording');
+        mic.setAttribute('aria-pressed', 'true');
+        mic.innerText = '\u{1F534}';
+        speechStatus('Listening... Click the microphone to finish.');
       };
-
-      rec.onresult = (event) => {
+      rec.onresult = event => {
+        if (recognition !== rec) return;
         let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
-        }
-        const msgInput = document.getElementById('message-input');
-        if (msgInput) {
-          msgInput.value = transcript;
-        }
+        for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript;
+        field.value = [prefix, transcript.trim()].filter(Boolean).join(' ').slice(0, 5000);
       };
-
-      rec.onerror = (event) => {
-        console.warn('Speech recognition warning/error:', event.error);
-        if (event.error === 'not-allowed') {
-          alert('Microphone access blocked. Please allow mic permissions in your browser URL bar.');
-        }
+      rec.onerror = event => {
+        if (recognition !== rec) return;
+        const errors = {
+          'not-allowed': 'Microphone permission denied. Allow microphone access in your browser settings.',
+          'audio-capture': 'No microphone is available. Check your microphone connection.',
+          'no-speech': 'No speech detected. Try again.',
+          'network': 'Speech recognition could not connect. Check your connection and try again.'
+        };
         stopSpeech();
+        speechStatus(errors[event.error] || 'Speech input stopped. Try again or type your message.');
       };
-
       rec.onend = () => {
+        if (recognition !== rec) return;
         stopSpeech();
+        speechStatus('Microphone stopped. Review your message, then send.');
       };
-
-      return rec;
-    }
-
-    function toggleSpeech() {
-      if (!SpeechRecognition) {
-        alert('Voice input is not supported in this browser. Please use Chrome, Edge, or Safari.');
-        return;
-      }
-
-      if (isRecording) {
-        if (recognition) {
-          try { recognition.stop(); } catch (e) { recognition.abort(); }
-        }
-        stopSpeech();
-        return;
-      }
-
-      // Recreate a clean instance to prevent "already started" InvalidStateError
-      try {
-        if (recognition) {
-          recognition.abort();
-        }
-      } catch (e) {}
-
-      recognition = setupRecognition();
-
-      const langDropdown = document.getElementById('user-lang-select');
-      const langCode = langDropdown ? langDropdown.value : 'en';
-      recognition.lang = speechLangMap[langCode] || 'en-US';
-
-      try {
-        recognition.start();
-      } catch (err) {
-        console.warn('Recognition start caught error:', err);
-        stopSpeech();
-      }
-    }
-
-    function stopSpeech() {
-      isRecording = false;
-      const micBtn = document.getElementById('mic-btn');
-      const msgInput = document.getElementById('message-input');
-      if (micBtn) {
-        micBtn.classList.remove('recording');
-        micBtn.innerText = '🎙️';
-      }
-      if (msgInput) {
-        msgInput.placeholder = 'Share your perspective in your native language...';
-      }
+      try { rec.start(); }
+      catch (_) { stopSpeech(); speechStatus('Microphone could not start. Try again.'); }
     }
 
     // ----------------------------------------------------
@@ -304,22 +284,66 @@
     const messages = document.getElementById('messages');
     const langSelect = document.getElementById('user-lang-select');
 
+    let activeChatId = null;
+    const chatSelect = document.getElementById('chat-select');
+    let desiredChatId = null;
+    try { desiredChatId = localStorage.getItem('civic-chat'); } catch (_) {}
+    socket.on('chat list', chats => {
+      chatSelect.replaceChildren();
+      for (const chat of chats) {
+        const option = document.createElement('option');
+        option.value = chat.id;
+        option.textContent = chat.title;
+        chatSelect.appendChild(option);
+      }
+      if (!activeChatId) socket.emit('join chat', chats.some(c => c.id === desiredChatId) ? desiredChatId : chats[0].id);
+      else chatSelect.value = activeChatId;
+    });
+    socket.on('disconnect', () => { activeChatId = null; stopSpeech(); });
+    chatSelect.addEventListener('change', () => {
+      stopSpeech();
+      input.value = '';
+      activeChatId = null;
+      socket.emit('join chat', chatSelect.value);
+    });
+    document.getElementById('new-chat').addEventListener('click', () => {
+      if (!socket.connected) return alert('Reconnect before creating a chat.');
+      const title = prompt('Name this conversation (up to 80 characters):');
+      if (title && title.trim()) socket.emit('create chat', title.trim());
+    });
+    langSelect.addEventListener('change', () => { stopSpeech(); if (activeChatId) socket.emit('join chat', activeChatId); });
+
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      if (!currentUser || !socket.connected || !activeChatId) {
+        alert('Please sign in and wait for the connection before sending.');
+        return;
+      }
       if (input.value.trim()) {
+        stopSpeech();
         socket.emit('chat message', {
           author: currentUser ? (currentUser.name || currentUser.nickname) : 'Anonymous',
+          chatId: activeChatId,
           text: input.value.trim()
         });
         input.value = '';
       }
     });
 
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
+
+    socket.on('chat error', message => alert(message));
+
     // Helper to render message cards
     async function renderMessage(data) {
       const card = document.createElement('li');
       card.className = 'message-card';
 
+      messages.appendChild(card); // Reserve its position before translation finishes.
       const targetLang = langSelect ? langSelect.value : 'en';
       let displayText = data.translated;
 
@@ -330,24 +354,25 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: data.translated, targetLang })
           });
+          if (!res.ok) throw new Error('Translation failed');
           const json = await res.json();
-          displayText = json.translated;
+          if (typeof json.translated === 'string') displayText = json.translated;
         } catch (e) {
           console.error(e);
         }
       }
 
       card.innerHTML = `
-        <div class="author-line">${data.author || 'Participant'}</div>
-        <div class="translated-text">${displayText}</div>
-        <div class="original-text">Original: "${data.original}"</div>
+        <div class="author-line">${escapeHtml(data.author || 'Participant')}</div>
+        <div class="translated-text">${escapeHtml(displayText)}</div>
+        <div class="original-text">Original: "${escapeHtml(data.original)}"</div>
         <div class="card-footer">
-          <span class="badge">${data.emoji} ${data.tone}</span>
+          <span class="badge">${escapeHtml(data.emoji)} ${escapeHtml(data.tone)}</span>
           <div class="actions">
-            <button class="btn-action" onclick="verifyClaim('${encodeURIComponent(data.translated)}', this)">
+            <button class="btn-action" data-action="verify">
               🔍 Check Evidence
             </button>
-            <button class="btn-action" onclick="playAudio('${encodeURIComponent(displayText)}', '${encodeURIComponent(data.tone)}', this)">
+            <button class="btn-action" data-action="listen">
               🔊 Listen
             </button>
           </div>
@@ -355,20 +380,24 @@
         <div class="factcheck-box" style="display: none;"></div>
       `;
 
-      messages.appendChild(card);
+      card.querySelector('[data-action="verify"]').addEventListener('click', event => verifyClaim(data.translated, event.currentTarget));
+      card.querySelector('[data-action="listen"]').addEventListener('click', event => playAudio(displayText, data.tone, event.currentTarget));
     }
 
     // Load full history when joining or refreshing
-    socket.on('chat history', async (history) => {
+    socket.on('chat history', async ({ chatId, messages: history }) => {
+      if (activeChatId !== chatId) { stopSpeech(); input.value = ''; closeSummary(); }
+      activeChatId = desiredChatId = chatId;
+      chatSelect.value = chatId;
+      try { localStorage.setItem('civic-chat', chatId); } catch (_) {}
       messages.innerHTML = '';
-      for (const msg of history) {
-        await renderMessage(msg);
-      }
+      await Promise.all(history.map(renderMessage));
       messages.scrollTop = messages.scrollHeight;
     });
 
     // Handle new incoming live message
     socket.on('chat message', async (data) => {
+      if (data.chatId !== activeChatId) return;
       await renderMessage(data);
       messages.scrollTop = messages.scrollHeight;
     });
@@ -376,12 +405,11 @@
     // ----------------------------------------------------
     // FACT CHECK, TTS & SUMMARY HELPERS
     // ----------------------------------------------------
-    async function verifyClaim(encodedText, btn) {
-      const claim = decodeURIComponent(encodedText);
+    async function verifyClaim(claim, btn) {
       const box = btn.closest('.message-card').querySelector('.factcheck-box');
       const langDropdown = document.getElementById('user-lang-select');
       const targetLang = langDropdown ? langDropdown.value : 'en';
-      
+
       btn.disabled = true;
       btn.innerText = '🔍 Checking...';
       box.style.display = 'block';
@@ -393,16 +421,17 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ claim, targetLang })
         });
+        if (!res.ok) throw new Error('Request failed');
         const data = await res.json();
-        
-        let sourcesHtml = (data.sources || []).map(s => 
-          `<a class="source-link" href="${s.url}" target="_blank" rel="noopener">🔗 ${s.title || 'Source'}</a>`
+
+        let sourcesHtml = (Array.isArray(data.sources) ? data.sources : []).filter(s => s && /^https?:\/\//i.test(s.url)).map(s =>
+          `<a class="source-link" href="${escapeHtml(s.url)}" target="_blank" rel="noopener">🔗 ${escapeHtml(s.title || 'Source')}</a>`
         ).join('');
 
         box.innerHTML = `
           <div style="margin-bottom: 6px;">
-            <span class="status-tag status-Needs">${data.status}</span>
-            <span style="margin-left: 6px;">${data.explanation}</span>
+            <span class="status-tag status-Needs">${escapeHtml(data.status)}</span>
+            <span style="margin-left: 6px;">${escapeHtml(data.explanation)}</span>
           </div>
           <div>${sourcesHtml}</div>
         `;
@@ -414,32 +443,37 @@
       }
     }
 
+    let summaryRequest = 0;
     async function openSummary() {
+      if (!activeChatId) return;
+      const requestId = ++summaryRequest;
       const modal = document.getElementById('summary-modal');
       const body = document.getElementById('summary-body');
       modal.style.display = 'flex';
       body.innerHTML = '<em>Analyzing dialogue, viewpoints, and common ground...</em>';
 
       try {
-        const res = await fetch('/api/summarize');
+        const res = await fetch('/api/summarize?chatId=' + encodeURIComponent(activeChatId));
+        if (!res.ok) throw new Error('Request failed');
         const data = await res.json();
-        let formatted = data.summary
+        if (requestId !== summaryRequest) return;
+        let formatted = escapeHtml(data.summary)
           .replace(/^### (.*$)/gim, '<h4 style="margin: 12px 0 6px 0; color: #1e293b;">$1</h4>')
           .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
           .replace(/\n/gim, '<br>');
         body.innerHTML = formatted;
       } catch (err) {
+        if (requestId !== summaryRequest) return;
         body.innerHTML = '<span style="color: red;">Error generating summary.</span>';
       }
     }
 
     function closeSummary() {
+      summaryRequest++;
       document.getElementById('summary-modal').style.display = 'none';
     }
 
-    async function playAudio(encodedText, encodedTone, btn) {
-      const text = decodeURIComponent(encodedText);
-      const tone = decodeURIComponent(encodedTone);
+    async function playAudio(text, tone, btn) {
       const originalLabel = btn.innerText;
 
       btn.disabled = true;
@@ -457,7 +491,8 @@
         const blob = await res.blob();
         const audioUrl = URL.createObjectURL(blob);
         const audio = new Audio(audioUrl);
-        audio.onended = () => {
+        audio.onended = audio.onerror = () => {
+          URL.revokeObjectURL(audioUrl);
           btn.disabled = false;
           btn.innerText = originalLabel;
         };
@@ -471,7 +506,10 @@
       }
     }
 
-    window.onload = initAuth0;
+    window.onload = () => initAuth0().catch(error => {
+      console.error('Sign-in initialization failed:', error);
+      document.getElementById('auth-overlay').textContent = 'Sign-in could not load. Check your connection and refresh.';
+    });
   </script>
 </body>
 </html>
