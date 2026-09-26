@@ -187,13 +187,12 @@
     }
 
     // ----------------------------------------------------
-    // SPEECH RECOGNITION (VOICE INPUT)
+    // SPEECH RECOGNITION (VOICE INPUT) - ROBUST STATE SYNC
     // ----------------------------------------------------
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
     let isRecording = false;
 
-    // Map dropdown codes to speech recognition BCP-47 tags
     const speechLangMap = {
       en: 'en-US',
       es: 'es-ES',
@@ -203,63 +202,98 @@
       ar: 'ar-SA'
     };
 
-    if (SpeechRecognition) {
-      recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = true;
+    function setupRecognition() {
+      if (!SpeechRecognition) return null;
+      
+      const rec = new SpeechRecognition();
+      rec.continuous = false;
+      rec.interimResults = true;
 
-      recognition.onstart = () => {
+      rec.onstart = () => {
         isRecording = true;
         const micBtn = document.getElementById('mic-btn');
-        micBtn.classList.add('recording');
-        micBtn.innerText = '🔴';
-        input.placeholder = 'Listening... speak now';
+        const msgInput = document.getElementById('message-input');
+        if (micBtn) {
+          micBtn.classList.add('recording');
+          micBtn.innerText = '🔴';
+        }
+        if (msgInput) {
+          msgInput.placeholder = 'Listening... speak now';
+        }
       };
 
-      recognition.onresult = (event) => {
+      rec.onresult = (event) => {
         let transcript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           transcript += event.results[i][0].transcript;
         }
-        input.value = transcript;
+        const msgInput = document.getElementById('message-input');
+        if (msgInput) {
+          msgInput.value = transcript;
+        }
       };
 
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
+      rec.onerror = (event) => {
+        console.warn('Speech recognition warning/error:', event.error);
+        if (event.error === 'not-allowed') {
+          alert('Microphone access blocked. Please allow mic permissions in your browser URL bar.');
+        }
         stopSpeech();
       };
 
-      recognition.onend = () => {
+      rec.onend = () => {
         stopSpeech();
       };
-    } else {
-      console.warn('Web Speech API is not supported in this browser.');
-      const micBtn = document.getElementById('mic-btn');
-      if (micBtn) micBtn.style.display = 'none';
+
+      return rec;
     }
 
     function toggleSpeech() {
-      if (!recognition) {
+      if (!SpeechRecognition) {
         alert('Voice input is not supported in this browser. Please use Chrome, Edge, or Safari.');
         return;
       }
+
       if (isRecording) {
-        recognition.stop();
-      } else {
-        const langCode = langSelect.value;
-        recognition.lang = speechLangMap[langCode] || 'en-US';
+        if (recognition) {
+          try { recognition.stop(); } catch (e) { recognition.abort(); }
+        }
+        stopSpeech();
+        return;
+      }
+
+      // Recreate a clean instance to prevent "already started" InvalidStateError
+      try {
+        if (recognition) {
+          recognition.abort();
+        }
+      } catch (e) {}
+
+      recognition = setupRecognition();
+
+      const langDropdown = document.getElementById('user-lang-select');
+      const langCode = langDropdown ? langDropdown.value : 'en';
+      recognition.lang = speechLangMap[langCode] || 'en-US';
+
+      try {
         recognition.start();
+      } catch (err) {
+        console.warn('Recognition start caught error:', err);
+        stopSpeech();
       }
     }
 
     function stopSpeech() {
       isRecording = false;
       const micBtn = document.getElementById('mic-btn');
+      const msgInput = document.getElementById('message-input');
       if (micBtn) {
         micBtn.classList.remove('recording');
         micBtn.innerText = '🎙️';
       }
-      input.placeholder = 'Share your perspective in your native language...';
+      if (msgInput) {
+        msgInput.placeholder = 'Share your perspective in your native language...';
+      }
     }
 
     // ----------------------------------------------------
@@ -279,6 +313,64 @@
         });
         input.value = '';
       }
+    });
+
+    // Helper to render message cards
+    async function renderMessage(data) {
+      const card = document.createElement('li');
+      card.className = 'message-card';
+
+      const targetLang = langSelect ? langSelect.value : 'en';
+      let displayText = data.translated;
+
+      if (targetLang !== 'en') {
+        try {
+          const res = await fetch('/api/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: data.translated, targetLang })
+          });
+          const json = await res.json();
+          displayText = json.translated;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      card.innerHTML = `
+        <div class="author-line">${data.author || 'Participant'}</div>
+        <div class="translated-text">${displayText}</div>
+        <div class="original-text">Original: "${data.original}"</div>
+        <div class="card-footer">
+          <span class="badge">${data.emoji} ${data.tone}</span>
+          <div class="actions">
+            <button class="btn-action" onclick="verifyClaim('${encodeURIComponent(data.translated)}', this)">
+              🔍 Check Evidence
+            </button>
+            <button class="btn-action" onclick="playAudio('${encodeURIComponent(displayText)}', '${encodeURIComponent(data.tone)}', this)">
+              🔊 Listen
+            </button>
+          </div>
+        </div>
+        <div class="factcheck-box" style="display: none;"></div>
+      `;
+
+      messages.appendChild(card);
+    }
+
+    // Load full history when joining or refreshing
+    socket.on('chat history', async (history) => {
+      messages.innerHTML = '';
+      for (const msg of history) {
+        await renderMessage(msg);
+      }
+      messages.scrollTop = messages.scrollHeight;
+    });
+
+    // Handle new incoming live message
+    socket.on('chat message', async (data) => {
+      await renderMessage(data);
+      messages.scrollTop = messages.scrollHeight;
     });
 
     socket.on('chat message', async (data) => {
@@ -330,6 +422,8 @@
     async function verifyClaim(encodedText, btn) {
       const claim = decodeURIComponent(encodedText);
       const box = btn.closest('.message-card').querySelector('.factcheck-box');
+      const langDropdown = document.getElementById('user-lang-select');
+      const targetLang = langDropdown ? langDropdown.value : 'en';
       
       btn.disabled = true;
       btn.innerText = '🔍 Checking...';
@@ -340,18 +434,17 @@
         const res = await fetch('/api/factcheck', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ claim })
+          body: JSON.stringify({ claim, targetLang })
         });
         const data = await res.json();
         
-        const statusClass = 'status-' + (data.status || 'Needs').split(' ')[0];
         let sourcesHtml = (data.sources || []).map(s => 
           `<a class="source-link" href="${s.url}" target="_blank" rel="noopener">🔗 ${s.title || 'Source'}</a>`
         ).join('');
 
         box.innerHTML = `
           <div style="margin-bottom: 6px;">
-            <span class="status-tag ${statusClass}">${data.status}</span>
+            <span class="status-tag status-Needs">${data.status}</span>
             <span style="margin-left: 6px;">${data.explanation}</span>
           </div>
           <div>${sourcesHtml}</div>

@@ -1,4 +1,6 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -13,58 +15,79 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 app.use(express.json());
 app.use(express.static('public'));
 
-// Global in-memory log for the conversation
-const messageHistory = [];
+// File persistence setup
+const CHAT_FILE = path.join(__dirname, 'chats.json');
+let messageHistory = [];
+
+if (fs.existsSync(CHAT_FILE)) {
+  try {
+    messageHistory = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8'));
+    console.log(`Loaded ${messageHistory.length} messages from chats.json`);
+  } catch (err) {
+    console.error('Error reading chats.json, initializing empty history:', err);
+    messageHistory = [];
+  }
+}
+
+function saveHistory() {
+  try {
+    fs.writeFileSync(CHAT_FILE, JSON.stringify(messageHistory, null, 2));
+  } catch (err) {
+    console.error('Failed to save chats to disk:', err);
+  }
+}
 
 // WebSocket Handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-    socket.on('chat message', async (data) => {
-    // Extract text and author whether data is a string or an object
+  // Send prior conversation to newly joined client
+  socket.emit('chat history', messageHistory);
+
+  socket.on('chat message', async (data) => {
     const author = typeof data === 'object' && data.author ? data.author : 'Participant';
     const textContent = typeof data === 'object' && data.text ? data.text : String(data);
 
     try {
-        const chatCompletion = await groq.chat.completions.create({
+      const chatCompletion = await groq.chat.completions.create({
         messages: [
-            {
+          {
             role: 'system',
             content:
-                'You are an AI civic mediator. You MUST respond with valid JSON only. ' +
-                'Translate the incoming message into clear English (if it is already English, keep it as is). ' +
-                'Analyze the emotional subtext and tone (e.g., Frustrated, Skeptical, Passionate, Constructive, Inquisitive, Calm). ' +
-                'Pick one single fitting emoji. ' +
-                'Schema: {"original": "...", "translated": "...", "tone": "...", "emoji": "..."}'
-            },
-            { 
-            role: 'user', 
-            content: textContent // Must be a string
-            }
+              'You are an AI civic mediator. You MUST respond with valid JSON only. ' +
+              'Translate the incoming message into clear English (if it is already English, keep it as is). ' +
+              'Analyze the emotional subtext and tone (e.g., Frustrated, Skeptical, Passionate, Constructive, Inquisitive, Calm). ' +
+              'Pick one single fitting emoji. ' +
+              'Schema: {"original": "...", "translated": "...", "tone": "...", "emoji": "..."}'
+          },
+          { role: 'user', content: textContent }
         ],
         model: 'qwen/qwen3.8-27b',
         response_format: { type: 'json_object' },
         temperature: 0.2
-        });
+      });
 
-        const parsedData = JSON.parse(chatCompletion.choices[0].message.content);
-        parsedData.author = author;
+      const parsedData = JSON.parse(chatCompletion.choices[0].message.content);
+      parsedData.author = author;
 
-        messageHistory.push(parsedData);
-        io.emit('chat message', parsedData);
+      messageHistory.push(parsedData);
+      saveHistory(); // Write to chats.json
+      
+      io.emit('chat message', parsedData);
     } catch (error) {
-        console.error('Groq processing error detail:', error);
-        const fallback = {
+      console.error('Groq processing error detail:', error);
+      const fallback = {
         author,
         original: textContent,
         translated: textContent,
         tone: 'Direct',
         emoji: '💬'
-        };
-        messageHistory.push(fallback);
-        io.emit('chat message', fallback);
+      };
+      messageHistory.push(fallback);
+      saveHistory();
+      io.emit('chat message', fallback);
     }
-    }); 
+  });
 });
 
 // ElevenLabs Text-to-Speech Route
@@ -118,13 +141,14 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
-// LIVE FACT-CHECKING ROUTE (Open Wikipedia REST API + LLM Synthesis)
+// LIVE FACT-CHECKING ROUTE (Multilingual Localized Output)
 app.post('/api/factcheck', async (req, res) => {
-  const { claim } = req.body;
+  const { claim, targetLang } = req.body;
   if (!claim) return res.status(400).send('Claim is required');
 
+  const language = targetLang || 'en';
+
   try {
-    // 1. Query the open Wikipedia search endpoint (100% free, no key needed)
     const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(claim)}&utf8=&format=json&origin=*`;
     const searchRes = await fetch(wikiSearchUrl);
     const searchJson = await searchRes.json();
@@ -137,7 +161,6 @@ app.post('/api/factcheck', async (req, res) => {
 
     if (topResults.length > 0) {
       searchContext = topResults.map(r => {
-        // Strip out HTML tags Wikipedia returns in snippets
         const cleanSnippet = r.snippet.replace(/<\/?[^>]+(>|$)/g, '');
         return `Title: ${r.title}\nSnippet: ${cleanSnippet}\nURL: https://en.wikipedia.org/wiki/${encodeURIComponent(r.title.replace(/ /g, '_'))}`;
       }).join('\n\n');
@@ -148,17 +171,17 @@ app.post('/api/factcheck', async (req, res) => {
       }));
     }
 
-    // 2. Synthesize using Qwen with the retrieved context
     const response = await groq.chat.completions.create({
       messages: [
         {
           role: 'system',
           content:
-            'You are an impartial civic fact-checker. You MUST respond with JSON only. ' +
-            'Evaluate the user claim strictly against the provided reference evidence. ' +
-            'Determine status: "Verified", "Questionable", or "Needs Context". ' +
-            'Provide a 1-2 sentence neutral explanation and confirm sources. ' +
-            'Schema: {"status": "...", "explanation": "...", "sources": [{"title": "...", "url": "..."}]}'
+            `You are an impartial civic fact-checker. Respond with JSON only. ` +
+            `Evaluate the user claim strictly against the provided reference evidence. ` +
+            `Write the status and explanation in the target language: "${language}". ` +
+            `Status must be the localized equivalent of ("Verified", "Questionable", or "Needs Context"). ` +
+            `Provide a concise 1-2 sentence neutral explanation in "${language}". ` +
+            `Schema: {"status": "...", "explanation": "...", "sources": [{"title": "...", "url": "..."}]}`
         },
         {
           role: 'user',
@@ -171,8 +194,6 @@ app.post('/api/factcheck', async (req, res) => {
     });
 
     const result = JSON.parse(response.choices[0].message.content);
-    
-    // Ensure verified clickable sources are always attached
     if (!result.sources || result.sources.length === 0) {
       result.sources = sources;
     }
