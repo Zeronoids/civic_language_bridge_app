@@ -373,49 +373,6 @@
       messages.scrollTop = messages.scrollHeight;
     });
 
-    socket.on('chat message', async (data) => {
-      const card = document.createElement('li');
-      card.className = 'message-card';
-
-      const targetLang = langSelect.value;
-      let displayText = data.translated;
-
-      if (targetLang !== 'en') {
-        try {
-          const res = await fetch('/api/translate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: data.translated, targetLang })
-          });
-          const json = await res.json();
-          displayText = json.translated;
-        } catch (e) {
-          console.error(e);
-        }
-      }
-      
-      card.innerHTML = `
-        <div class="author-line">${data.author || 'Participant'}</div>
-        <div class="translated-text">${displayText}</div>
-        <div class="original-text">Original: "${data.original}"</div>
-        <div class="card-footer">
-          <span class="badge">${data.emoji} ${data.tone}</span>
-          <div class="actions">
-            <button class="btn-action" onclick="verifyClaim('${encodeURIComponent(data.translated)}', this)">
-              🔍 Check Evidence
-            </button>
-            <button class="btn-action" onclick="playAudio('${encodeURIComponent(displayText)}', '${encodeURIComponent(data.tone)}', this)">
-              🔊 Listen
-            </button>
-          </div>
-        </div>
-        <div class="factcheck-box" style="display: none;"></div>
-      `;
-      
-      messages.appendChild(card);
-      messages.scrollTop = messages.scrollHeight;
-    });
-
     // ----------------------------------------------------
     // FACT CHECK, TTS & SUMMARY HELPERS
     // ----------------------------------------------------
