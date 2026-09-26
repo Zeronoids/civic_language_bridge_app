@@ -12,7 +12,7 @@ The ambition is to support conversations from community discussions to dialogue 
 - **Across languages:** Read in English, Spanish, French, German, Chinese, or Arabic. Expand a message to see the original wording.
 - **Room for nuance:** AI-generated tone labels offer a possible interpretation, not a definitive account of someone's intent.
 - **Speak and listen:** Dictate a draft with browser speech recognition or listen through ElevenLabs text-to-speech.
-- **Explore references:** Request an AI-assisted assessment using retrieved Wikipedia search snippets and links.
+- **Explore references:** Request an AI-assisted assessment using retrieved Wikipedia search snippets, article introductions, and links.
 - **Find common ground:** Summarize perspectives, friction points, and shared values in the selected conversation.
 
 The responsive interface includes a conversation sidebar, language controls, expandable originals, and guidance for thoughtful dialogue, with keyboard focus styles and accessible control labels.
@@ -117,7 +117,7 @@ tests/chat-and-speech.test.js   Mocked regression checks
 
 - Auth0 gates the interface; the backend does not verify access tokens or enforce private-chat permissions.
 - Translations, tone interpretations, evidence assessments, and summaries can be incorrect. Original wording and participant clarification remain essential.
-- Evidence checks use Wikipedia search snippets, not comprehensive research or authoritative verification.
+- Evidence checks use Wikipedia snippets and introductory extracts, not comprehensive research or authoritative verification.
 - Storage and message delivery assume one server instance. External persistence, access controls, and abuse protection are needed before broader production use.
 
 ## Participant judgment and civic questions
@@ -129,3 +129,10 @@ Participants represented in a summary can choose **That captures my view** or **
 Message authors can hide or dispute their tone label, or restore it. Hidden/disputed labels also stop influencing voice playback settings. Evidence assessments now use **Supported by retrieved references**, **Conflicting evidence**, or **Insufficient evidence**, with an instruction to account for the limits of search snippets.
 
 Feedback ownership uses a random browser token, hashed on the server. It is not verified Auth0 identity, a vote, or proof of consensus. Changing browsers or clearing local storage loses access to that browser's feedback controls. Existing messages created before this feature have no ownership token. Server-side verified identity remains future work.
+
+
+### Context-aware evidence checks
+
+Evidence checks read the selected message and up to 12 preceding messages from the same chat, plus its community question. Context helps interpret the claim but is never treated as independent proof. One Groq call plans up to three targeted searches, then a second assesses up to six Wikipedia references. This uses more tokens than the previous single-call check.
+
+Assessments preserve qualifiers such as "some" and separate factual support from ambiguous judgments such as "failed". The interface exposes the interpretation, search queries, numbered references, and retrieved excerpts. Retrieval outages show an error rather than judging the claim. Results can still miss evidence; no particular verdict is guaranteed.

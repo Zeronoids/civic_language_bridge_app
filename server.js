@@ -208,65 +208,21 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
-// LIVE FACT-CHECKING ROUTE (Multilingual Localized Output)
+// Context-aware evidence retrieval and scoped assessment.
+const { claimContext, checkEvidence } = require('./evidence');
 app.post('/api/factcheck', async (req, res) => {
-  const { claim, targetLang } = req.body || {};
-  if (typeof claim !== 'string' || !claim.trim() || claim.length > 5000) return res.status(400).send('Claim is required');
-
+  const { chatId, messageId, messageIndex, targetLang } = req.body || {};
+  const chat = chats.find(c => c.id === chatId);
+  if (!chat) return res.status(404).json({ error: 'Conversation not found' });
+  const index = typeof messageId === 'string' ? chat.messages.findIndex(m => m.id === messageId) : messageIndex;
+  if (!Number.isInteger(index) || index < 0 || index >= chat.messages.length) return res.status(404).json({ error: 'Message not found' });
   const language = targetLang || 'en';
-
+  if (!['en', 'es', 'fr', 'de', 'zh', 'ar'].includes(language)) return res.status(400).json({ error: 'Invalid language' });
   try {
-    const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(claim)}&utf8=&format=json&origin=*`;
-    const searchRes = await fetch(wikiSearchUrl, { signal: AbortSignal.timeout(10000) });
-    const searchJson = await searchRes.json();
-
-    const searchResults = (searchJson.query && searchJson.query.search) || [];
-    const topResults = searchResults.slice(0, 3);
-
-    let searchContext = 'No direct historical or civic documents found.';
-    let sources = [];
-
-    if (topResults.length > 0) {
-      searchContext = topResults.map(r => {
-        const cleanSnippet = r.snippet.replace(/<\/?[^>]+(>|$)/g, '');
-        return `Title: ${r.title}\nSnippet: ${cleanSnippet}\nURL: https://en.wikipedia.org/wiki/${encodeURIComponent(r.title.replace(/ /g, '_'))}`;
-      }).join('\n\n');
-
-      sources = topResults.slice(0, 2).map(r => ({
-        title: r.title,
-        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(r.title.replace(/ /g, '_'))}`
-      }));
-    }
-
-    const response = await groq.chat.completions.create({
-      messages: [
-        {
-          role: 'system',
-          content:
-            `You are an impartial civic fact-checker. Respond with JSON only. ` +
-            `Evaluate the user claim strictly against the provided reference evidence. Search snippets are incomplete; use Insufficient evidence when they do not directly establish the claim. ` +
-            `Write the status and explanation in the target language: "${language}". ` +
-            `Status must be the localized equivalent of ("Supported by retrieved references", "Conflicting evidence", or "Insufficient evidence"). ` +
-            `Provide a concise 1-2 sentence neutral explanation in "${language}". ` +
-            `Schema: {"status": "...", "explanation": "...", "sources": [{"title": "...", "url": "..."}]}`
-        },
-        {
-          role: 'user',
-          content: `Claim: "${claim}"\n\nReference Evidence:\n${searchContext}`
-        }
-      ],
-      model: 'qwen/qwen3.8-27b',
-      response_format: { type: 'json_object' },
-      temperature: 0.1
-    });
-
-    const result = JSON.parse(response.choices[0].message.content);
-    result.sources = sources; // Only link to references actually retrieved.
-
-    res.json(result);
-  } catch (err) {
-    console.error('Fact-check error:', err);
-    res.status(500).json({ status: 'Error', explanation: 'Failed to complete evidence retrieval.', sources: [] });
+    res.json(await checkEvidence(claimContext(chat, index), language, groq));
+  } catch (error) {
+    console.error('Evidence retrieval error:', error);
+    res.status(503).json({ error: 'Evidence checking is temporarily unavailable. Please retry.' });
   }
 });
 

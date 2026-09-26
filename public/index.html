@@ -351,7 +351,7 @@
         <div class="factcheck-box" style="display: none;"></div>
       `;
 
-      card.querySelector('[data-action="verify"]').addEventListener('click', event => verifyClaim(data.translated, event.currentTarget));
+      card.querySelector('[data-action="verify"]').addEventListener('click', event => verifyClaim({ chatId: data.chatId || activeChatId, messageId: data.id, messageIndex: data.messageIndex }, event.currentTarget));
       const badge = card.querySelector('.badge');
       const originalBadge = badge.innerHTML;
       const applyTone = state => {
@@ -405,7 +405,7 @@
       try { localStorage.setItem('civic-chat', chatId); } catch (_) {}
       messages.innerHTML = '';
       toneCards.clear();
-      await Promise.all(history.map(renderMessage));
+      await Promise.all(history.map((message, messageIndex) => renderMessage({ ...message, chatId, messageIndex })));
       messages.scrollTop = messages.scrollHeight;
     });
 
@@ -419,7 +419,7 @@
     // ----------------------------------------------------
     // FACT CHECK, TTS & SUMMARY HELPERS
     // ----------------------------------------------------
-    async function verifyClaim(claim, btn) {
+    async function verifyClaim(reference, btn) {
       const box = btn.closest('.message-card').querySelector('.factcheck-box');
       const langDropdown = document.getElementById('user-lang-select');
       const targetLang = langDropdown ? langDropdown.value : 'en';
@@ -433,13 +433,13 @@
         const res = await fetch('/api/factcheck', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ claim, targetLang })
+          body: JSON.stringify({ ...reference, targetLang })
         });
         if (!res.ok) throw new Error('Request failed');
         const data = await res.json();
 
         let sourcesHtml = (Array.isArray(data.sources) ? data.sources : []).filter(s => s && /^https?:\/\//i.test(s.url)).map(s =>
-          `<a class="source-link" href="${escapeHtml(s.url)}" target="_blank" rel="noopener">🔗 ${escapeHtml(s.title || 'Source')}</a>`
+          `<a class="source-link" href="${escapeHtml(s.url)}" target="_blank" rel="noopener">🔗 [${escapeHtml(s.id)}] ${escapeHtml(s.title || 'Source')}</a>`
         ).join('');
 
         box.innerHTML = `
@@ -447,7 +447,11 @@
             <span class="status-tag status-Needs">${escapeHtml(data.status)}</span>
             <span style="margin-left: 6px;">${escapeHtml(data.explanation)}</span>
           </div>
+          <p class="quiet">Context: ${escapeHtml(data.contextMessages)} preceding messages. ${data.limitedRetrieval ? 'Some reference retrieval was unavailable.' : ''}</p>
+          <details><summary>What was checked</summary><p>${escapeHtml(data.interpretation)}</p><p class="quiet">Searches: ${escapeHtml((data.queries || []).join('; '))}</p></details>
+          <p class="quiet">${escapeHtml(data.caveat)}</p>
           <div>${sourcesHtml}</div>
+          <details><summary>Read retrieved evidence</summary>${(data.sources || []).map(s => '<p><strong>[' + escapeHtml(s.id) + '] ' + escapeHtml(s.title) + '</strong><br>' + escapeHtml(s.extract || s.snippet) + '</p>').join('')}</details>
         `;
       } catch (err) {
         box.innerHTML = '<span style="color: red;">Failed to verify sources.</span>';
