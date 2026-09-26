@@ -5,131 +5,58 @@
   <title>Civic Bridge - Multilingual Discourse</title>
   <!-- Auth0 Single Page App SDK -->
   <script src="https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js"></script>
-  <style>
-    #mic-btn {
-      padding: 0 14px;
-      font-size: 18px;
-      background: #ffffff;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-    }
-    #mic-btn:hover {
-      background: #f1f5f9;
-    }
-    #mic-btn.recording {
-      background: #fee2e2;
-      border-color: #ef4444;
-      animation: pulse 1.2s infinite;
-    }
-    @keyframes pulse {
-      0% { transform: scale(1); }
-      50% { transform: scale(1.08); }
-      100% { transform: scale(1); }
-    }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 20px auto; padding: 0 16px; background-color: #f8fafc; color: #0f172a; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
-    h2 { margin: 0 0 4px 0; }
-    p.subtitle { color: #64748b; margin: 0; font-size: 14px; }
-    .user-bar { display: flex; align-items: center; gap: 8px; background: #fff; padding: 6px 12px; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 13px; }
-    .user-bar select { border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px 8px; font-size: 13px; }
-    .btn-auth { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
-    .btn-auth.logout { background: #ef4444; }
-    .summary-btn { background: #0f172a; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
-    .summary-btn:hover { background: #334155; }
-
-    #auth-overlay { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 40px 20px; text-align: center; margin-top: 40px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    #chat-section { display: none; }
-
-    #messages { list-style-type: none; padding: 0; min-height: 380px; max-height: 480px; overflow-y: auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 14px; }
-    .message-card { background: #f1f5f9; padding: 14px; border-radius: 8px; border-left: 4px solid #3b82f6; position: relative; }
-    .author-line { font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 4px; }
-    .translated-text { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
-    .original-text { font-size: 13px; color: #64748b; font-style: italic; margin-bottom: 10px; }
-    .card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; flex-wrap: wrap; gap: 8px; }
-    .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 12px; background: #e0e7ff; color: #3730a3; }
-    .actions { display: flex; gap: 6px; }
-    .btn-action { background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-weight: 500; color: #1e293b; }
-    .btn-action:hover { background: #f8fafc; border-color: #94a3b8; }
-    .factcheck-box { margin-top: 10px; padding: 10px; border-radius: 6px; background: #fff; border: 1px solid #e2e8f0; font-size: 13px; }
-    .status-tag { font-weight: 700; text-transform: uppercase; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
-    .status-Verified { background: #dcfce7; color: #166534; }
-    .status-Questionable { background: #fee2e2; color: #991b1b; }
-    .status-Needs { background: #fef3c7; color: #92400e; }
-    .source-link { display: inline-block; margin-right: 8px; margin-top: 4px; color: #2563eb; text-decoration: none; font-size: 12px; }
-    form { display: flex; gap: 8px; }
-    input { flex-grow: 1; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 15px; }
-    button[type="submit"] { padding: 12px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 600; }
-
-    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; padding: 16px; }
-    .modal-content { background: #fff; max-width: 600px; width: 100%; border-radius: 8px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-height: 80vh; overflow-y: auto; }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-
-  <div class="header">
-    <div>
-      <h2>Civic Bridge</h2>
-      <p class="subtitle">AI-mediated civic dialogue across languages</p>
-    </div>
-    <div style="display: flex; gap: 8px; align-items: center;">
-      <button class="summary-btn" onclick="openSummary()">⚖️ Summarize</button>
-      <div id="auth-controls"></div>
-    </div>
-  </div>
-
-  <!-- Signed Out Screen -->
-  <div id="auth-overlay">
-    <h3>Sign in to Join the Civic Dialogue</h3>
-    <p style="color: #64748b; margin-bottom: 20px;">Authenticated via Auth0. Set your native language to participate.</p>
-    <button class="btn-auth" style="padding: 10px 20px; font-size: 15px;" onclick="login()">Log In with Auth0</button>
-  </div>
-
-  <!-- Signed In Chat Room -->
-  <div id="chat-section">
-    <div class="user-bar" style="margin-bottom: 12px;">
-      <span>Logged in as: <strong id="username-display">User</strong></span>
-      <span style="margin-left: auto;">Translate incoming to:</span>
-      <select id="user-lang-select">
-        <option value="en" selected>English</option>
-        <option value="es">Spanish (Español)</option>
-        <option value="fr">French (Français)</option>
-        <option value="de">German (Deutsch)</option>
-        <option value="zh">Chinese (中文)</option>
-        <option value="ar">Arabic (العربية)</option>
-      </select>
-    </div>
-
-    <div class="user-bar">
-      <label for="chat-select">Saved chats</label>
-      <select id="chat-select" style="flex: 1;"></select>
-      <button type="button" class="btn-auth" id="new-chat">New chat</button>
-    </div>
-    <p class="subtitle">Shared conversations: everyone can access these chats.</p>
-    <ul id="messages"></ul>
-
-    <form id="chat-form">
-      <input id="message-input" maxlength="5000" autocomplete="off" placeholder="Share your perspective in your native language..." />
-      <button type="button" id="mic-btn" onclick="toggleSpeech()" title="Speak message">🎙️</button>
-      <button type="submit">Send</button>
-    </form>
-    <p id="speech-status" role="status" aria-live="polite"></p>
-  </div>
-
-  <!-- Summary Modal -->
-  <div id="summary-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3 style="margin: 0;">Unbiased Civic Summary</h3>
-        <button onclick="closeSummary()" style="cursor: pointer; border: none; background: none; font-size: 18px;">✕</button>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Civic Bridge home"><span class="brand-mark" aria-hidden="true">&#8781;</span><span>Civic<span class="brand-light">Bridge</span></span></a>
+    <span class="header-purpose">A little more understanding.</span>
+    <div id="auth-controls"></div>
+  </header>
+  <main>
+    <section id="auth-overlay" class="welcome">
+      <div class="welcome-copy">
+        <p class="eyebrow">BETTER CONVERSATIONS. SHARED POSSIBILITIES.</p>
+        <h1>Different languages.<br>Common humanity.</h1>
+        <p class="welcome-description">Every perspective deserves to be understood. Bring your words, hear the context, and discover where you can meet.</p>
+        <button class="btn-auth welcome-cta" onclick="login()">Join the conversation <span aria-hidden="true">&#8594;</span></button>
+        <p class="quiet">Sign in to take part in shared conversations.</p>
       </div>
-      <div id="summary-body" style="white-space: pre-wrap; line-height: 1.5; font-size: 14px; color: #334155;">Loading...</div>
-    </div>
+      <div class="welcome-art" aria-label="Translation, perspective, and common ground connect a conversation">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <span class="art-label label-one">Your words</span><span class="art-label label-two">Their perspective</span>
+        <div class="art-center">Understanding<span>starts with listening.</span></div>
+        <span class="art-label label-three">Our common ground</span>
+      </div>
+      <div class="welcome-features"><div><span>01 / LANGUAGE</span><h3>Speak in your own words.</h3><p>Read the conversation in your language, with the original always available.</p></div><div><span>02 / CONTEXT</span><h3>Look beyond the words.</h3><p>Explore possible tone, listen aloud, and check references together.</p></div><div><span>03 / PERSPECTIVE</span><h3>Find a place to begin.</h3><p>Bring viewpoints and shared interests into focus with a conversation summary.</p></div></div>
+    </section>
+    <section id="chat-section">
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-heading"><p class="eyebrow">YOUR CONVERSATIONS</p><span class="small-symbol" aria-hidden="true">&#9671;</span></div>
+          <button type="button" class="btn-auth" id="new-chat">+ New conversation</button>
+          <label class="field-label" for="chat-select">Open a saved conversation</label>
+          <select id="chat-select"></select>
+          <div class="sidebar-note"><span class="note-icon" aria-hidden="true">&#9711;</span><h3>A space for every perspective.</h3><p>Start with curiosity. Ask what someone means before assuming why they said it.</p></div>
+          <div class="profile"><span class="avatar" aria-hidden="true">&#9678;</span><div><span class="field-label">Participating as</span><strong id="username-display">Participant</strong></div></div>
+        </aside>
+        <section class="conversation" aria-label="Current conversation">
+          <header class="conversation-header"><div><p class="eyebrow">SHARED DIALOGUE</p><h1 id="conversation-title">Your conversation</h1><p class="quiet">Shared space &middot; Accessible to everyone</p></div><button class="summary-btn" onclick="openSummary()">&#10023; Find common ground</button></header>
+          <div class="language-bar"><span><span class="connection-dot" aria-hidden="true"></span><span id="connection-status" role="status">Connecting...</span></span><div><label for="user-lang-select">Read &amp; speak in</label><select id="user-lang-select"><option value="en">English</option><option value="es">Espa&#241;ol</option><option value="fr">Fran&#231;ais</option><option value="de">Deutsch</option><option value="zh">&#20013;&#25991;</option><option value="ar">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</option></select></div></div>
+          <ul id="messages" aria-label="Messages"></ul>
+          <div class="composer">
+            <form id="chat-form"><label class="sr-only" for="message-input">Your message</label><input id="message-input" maxlength="5000" autocomplete="off" placeholder="Share a thought. Ask a question. Build understanding." /><div class="composer-actions"><button type="button" id="mic-btn" onclick="toggleSpeech()" aria-label="Start or stop microphone" aria-pressed="false" title="Dictate a message">&#127897;</button><button type="submit">Send <span aria-hidden="true">&#8593;</span></button></div></form>
+            <div class="composer-hint"><span>Your words matter. Make room for theirs.</span><span>Enter to send</span></div>
+            <p id="speech-status" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+        <aside class="context-panel"><p class="eyebrow">THE UNDERSTANDING LAYER</p><h2>More than<br>words alone.</h2><p class="context-intro">A few tools to help you listen a little closer.</p><div class="context-item"><span class="context-number">01</span><h3>Across languages</h3><p>Messages are translated to your selected language. Open the original to keep the speaker's words in view.</p></div><div class="context-item"><span class="context-number">02</span><h3>Room for nuance</h3><p>Tone is an AI interpretation, not a statement of intent. When in doubt, ask the speaker.</p></div><div class="context-item"><span class="context-number">03</span><h3>Shared understanding</h3><p>Explore references and summarize the conversation to see where perspectives meet.</p></div><div class="context-footnote">Built for dialogue.<br>Guided by human judgment.</div></aside>
+      </div>
+    </section>
+  </main>
+  <div id="summary-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="summary-title" tabindex="-1">
+    <div class="modal-content"><div class="modal-header"><div><p class="eyebrow">CONVERSATION REFLECTION</p><h2 id="summary-title">Finding common ground</h2></div><button class="close-modal" onclick="closeSummary()" aria-label="Close summary">&#215;</button></div><p class="quiet">An AI-assisted view of the discussion. Check it against the participants' own words.</p><div id="summary-body">Loading...</div></div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
@@ -168,7 +95,7 @@
     }
 
     function showLogin() {
-      document.getElementById('auth-overlay').style.display = 'block';
+      document.getElementById('auth-overlay').style.display = '';
       document.getElementById('chat-section').style.display = 'none';
       document.getElementById('auth-controls').innerHTML = '';
     }
@@ -287,8 +214,14 @@
     let activeChatId = null;
     const chatSelect = document.getElementById('chat-select');
     let desiredChatId = null;
+    let knownChats = [];
+    function updateConversationTitle() {
+      document.getElementById('conversation-title').textContent = knownChats.find(chat => chat.id === activeChatId)?.title || 'Your conversation';
+    }
+    socket.on('connect', () => { document.getElementById('connection-status').textContent = 'Connected'; });
     try { desiredChatId = localStorage.getItem('civic-chat'); } catch (_) {}
     socket.on('chat list', chats => {
+      knownChats = chats;
       chatSelect.replaceChildren();
       for (const chat of chats) {
         const option = document.createElement('option');
@@ -298,8 +231,9 @@
       }
       if (!activeChatId) socket.emit('join chat', chats.some(c => c.id === desiredChatId) ? desiredChatId : chats[0].id);
       else chatSelect.value = activeChatId;
+      updateConversationTitle();
     });
-    socket.on('disconnect', () => { activeChatId = null; stopSpeech(); });
+    socket.on('disconnect', () => { activeChatId = null; stopSpeech(); document.getElementById('connection-status').textContent = 'Reconnecting...'; });
     chatSelect.addEventListener('change', () => {
       stopSpeech();
       input.value = '';
@@ -363,11 +297,11 @@
       }
 
       card.innerHTML = `
-        <div class="author-line">${escapeHtml(data.author || 'Participant')}</div>
-        <div class="translated-text">${escapeHtml(displayText)}</div>
-        <div class="original-text">Original: "${escapeHtml(data.original)}"</div>
+        <div class="author-line"><span class="message-avatar" aria-hidden="true">${escapeHtml((data.author || 'P').slice(0, 1).toUpperCase())}</span>${escapeHtml(data.author || 'Participant')}<span class="message-label">Perspective</span></div>
+        <div class="translated-text" dir="auto">${escapeHtml(displayText)}</div>
+        <details class="original-text"><summary>View original message</summary><p dir="auto">${escapeHtml(data.original)}</p></details>
         <div class="card-footer">
-          <span class="badge">${escapeHtml(data.emoji)} ${escapeHtml(data.tone)}</span>
+          <span class="badge">${escapeHtml(data.emoji)} ${escapeHtml(data.tone)}<span class="tone-label"> &middot; AI tone</span></span>
           <div class="actions">
             <button class="btn-action" data-action="verify">
               🔍 Check Evidence
@@ -389,6 +323,7 @@
       if (activeChatId !== chatId) { stopSpeech(); input.value = ''; closeSummary(); }
       activeChatId = desiredChatId = chatId;
       chatSelect.value = chatId;
+      updateConversationTitle();
       try { localStorage.setItem('civic-chat', chatId); } catch (_) {}
       messages.innerHTML = '';
       await Promise.all(history.map(renderMessage));
@@ -444,12 +379,15 @@
     }
 
     let summaryRequest = 0;
+    let summaryTrigger = null;
     async function openSummary() {
       if (!activeChatId) return;
       const requestId = ++summaryRequest;
+      summaryTrigger = document.activeElement;
       const modal = document.getElementById('summary-modal');
       const body = document.getElementById('summary-body');
       modal.style.display = 'flex';
+      modal.focus();
       body.innerHTML = '<em>Analyzing dialogue, viewpoints, and common ground...</em>';
 
       try {
@@ -471,6 +409,7 @@
     function closeSummary() {
       summaryRequest++;
       document.getElementById('summary-modal').style.display = 'none';
+      if (summaryTrigger) { summaryTrigger.focus(); summaryTrigger = null; }
     }
 
     async function playAudio(text, tone, btn) {
@@ -505,6 +444,14 @@
         setTimeout(() => { btn.innerText = originalLabel; }, 2000);
       }
     }
+
+    document.getElementById('summary-modal').addEventListener('click', event => {
+      if (event.target === event.currentTarget) closeSummary();
+    });
+    document.getElementById('summary-modal').addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeSummary();
+      if (event.key === 'Tab') { event.preventDefault(); document.querySelector('.close-modal').focus(); }
+    });
 
     window.onload = () => initAuth0().catch(error => {
       console.error('Sign-in initialization failed:', error);

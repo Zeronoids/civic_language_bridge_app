@@ -1,28 +1,121 @@
-# civic_language_bridge_app
+﻿# Civic Bridge
 
-Run `npm install`, configure the keys from `.env.example`, then run `npm start`.
+**Different languages. Common humanity.**
 
-Use **New chat** to name a conversation and **Saved chats** to reopen one.
-Chats are shared with everyone, not private to an Auth0 account. Each chat has
-its own history, live messages and summary. Refreshing/reconnecting restores
-the last selected chat. Existing single-chat history becomes General discussion.
+Civic Bridge is a hackathon prototype that adds a layer of understanding to communication. It helps people express themselves in their own language, consider the context behind a message, and find shared interests across different perspectives.
 
-Chats are saved atomically to `chats.json`. Set `CHAT_FILE` to override the path.
-Run only one server instance with this file-based storage. On a normal persistent
-disk, chats survive server restarts. DigitalOcean App Platform's local filesystem
-is ephemeral: chats can be lost when the container is replaced or redeployed.
-Durability there requires external storage (a database or Spaces), which this
-version does not configure. Merely setting CHAT_FILE does not make App Platform
-storage persistent.
+The ambition is to support conversations from community discussions to dialogue between leaders. This version demonstrates that idea through shared multilingual chat; it is not a secure platform for confidential or diplomatic communication.
 
-Microphone input uses the browser's SpeechRecognition implementation and the
-selected language. Use HTTPS (or localhost), allow microphone access, and click
-the microphone to dictate. Existing typed text is preserved; review before
-sending. Switching chats or sending cancels recognition so late results cannot
-modify another draft. Unsupported browsers can still use typed input.
+## Features
 
-Run `npm test` for mocked chat persistence/isolation, summary scope, and speech
-lifecycle tests. These do not test physical microphone capture or external APIs.
-For the demo, check the deployed site with a real microphone: allow permission,
-dictate multiple phrases, stop, verify the text, send, and repeat after switching
-chats. Also check denied permission and the selected speech language.
+- **Shared conversations:** Create named chats and reopen saved histories. Each chat has its own messages and summary.
+- **Across languages:** Read in English, Spanish, French, German, Chinese, or Arabic. Expand a message to see the original wording.
+- **Room for nuance:** AI-generated tone labels offer a possible interpretation, not a definitive account of someone's intent.
+- **Speak and listen:** Dictate a draft with browser speech recognition or listen through ElevenLabs text-to-speech.
+- **Explore references:** Request an AI-assisted assessment using retrieved Wikipedia search snippets and links.
+- **Find common ground:** Summarize perspectives, friction points, and shared values in the selected conversation.
+
+The responsive interface includes a conversation sidebar, language controls, expandable originals, and guidance for thoughtful dialogue, with keyboard focus styles and accessible control labels.
+
+## How it works
+
+1. A participant signs in through Auth0 and opens a shared conversation.
+2. Socket.IO sends their message to the Node.js server.
+3. Groq translates it into English and suggests a tone and emoji. Processing failures fall back to the original text.
+4. The server saves the message and broadcasts it to participants in that conversation.
+5. Each viewer's browser requests another translation when their selected language is not English.
+
+The submitted wording is preserved as the original. Summaries use the selected chat's English message history.
+
+## Local setup
+
+You need Node.js with npm, a Groq API key, an ElevenLabs API key for audio playback, and an Auth0 Single Page Application configured for your URLs.
+
+```sh
+npm install
+```
+
+Copy `.env.example` to `.env` and fill in your keys:
+
+```dotenv
+GROQ_API_KEY=your_groq_key_here
+ELEVENLABS_API_KEY=your_elevenlabs_key_here
+```
+
+| Optional variable | Purpose | Default |
+| --- | --- | --- |
+| `PORT` | HTTP listening port | `3000` |
+| `CHAT_FILE` | Saved conversation file path | `chats.json` in the project directory |
+
+The Auth0 domain and client ID are configured in `public/index.html`. To use your own application, update `AUTH0_DOMAIN` and `AUTH0_CLIENT_ID`. Allow `http://localhost:3000` in its callback URLs, logout URLs, and web origins. Adjust the URL if you use another port.
+
+```sh
+npm start
+```
+
+Open `http://localhost:3000`. Keep API keys in the server environment, not in frontend code or committed files.
+
+## Using Civic Bridge
+
+1. Select **Join the conversation** and sign in.
+2. Open a saved conversation or select **New conversation** to create one.
+3. Set **Read & speak in** to your preferred language. This also selects the microphone recognition language.
+4. Type or dictate a message, review it, then press **Send** or Enter.
+5. Use **View original message**, **Check Evidence**, or **Listen** for more context.
+6. Select **Find common ground** to summarize the current discussion.
+
+All chats are shared and accessible to everyone. Refreshing or reconnecting restores the browser's last selected conversation.
+
+## DigitalOcean deployment
+
+Deploy as an App Platform **Web Service**:
+
+| Setting | Value |
+| --- | --- |
+| Build command | Leave blank for automatic dependency installation |
+| Run command | `npm start` or `node server.js` |
+| HTTP port | `8080` |
+| HTTP health-check path, if enabled | `/` |
+
+Provide `GROQ_API_KEY` and `ELEVENLABS_API_KEY` as runtime environment variables. The server reads `PORT` from its environment. Add your deployed origin to Auth0's callback URLs, logout URLs, and web origins.
+
+No frontend compilation is needed. Express serves the files in `public/`.
+
+### Saved chats
+
+Chats are saved through a temporary file and rename to `chats.json`. Existing single-chat history is loaded as **General discussion**. Run one server instance with this file-based implementation.
+
+On persistent local disk, chats survive server restarts. **DigitalOcean App Platform's local filesystem is ephemeral**, so chats can disappear when a container is replaced or redeployed. Setting `CHAT_FILE` alone does not fix that. Durable hosted storage requires an external database or object storage integration, which this prototype does not yet implement. See [DigitalOcean's storage guidance](https://docs.digitalocean.com/products/app-platform/how-to/store-data/).
+
+## Microphone input
+
+Voice input uses the browser's `SpeechRecognition` or `webkitSpeechRecognition` implementation. It requires browser support, microphone permission, and HTTPS (or localhost). Participants can still type if recognition is unavailable.
+
+Dictation preserves existing typed text and accumulates speech results. Sending or switching conversations cancels recognition so delayed callbacks cannot modify another draft. Permission and recognition errors appear below the composer.
+
+## Checks
+
+```sh
+npm test
+```
+
+The automated checks simulate chat migration, saving and reloading, room isolation, summary scope, and speech-recognition events. Mocked services do not consume API credits. These checks do not verify physical microphone capture, live APIs, Auth0 configuration, or visual layout in a real browser.
+
+Before a demo, open two browser sessions in different chats to check message isolation. Test microphone permission, several spoken phrases, stopping and sending, and switching chats. Also try translation, audio playback, evidence retrieval, and a summary on the deployed site.
+
+## Project structure
+
+```text
+public/index.html              Interface markup and browser behavior
+public/styles.css              Responsive visual design
+server.js                      Routes, Socket.IO rooms, AI calls, persistence
+tests/chat-and-speech.test.js   Mocked regression checks
+.env.example                   Required API-key placeholders
+```
+
+## Prototype boundaries
+
+- Auth0 gates the interface; the backend does not verify access tokens or enforce private-chat permissions.
+- Translations, tone interpretations, evidence assessments, and summaries can be incorrect. Original wording and participant clarification remain essential.
+- Evidence checks use Wikipedia search snippets, not comprehensive research or authoritative verification.
+- Storage and message delivery assume one server instance. External persistence, access controls, and abuse protection are needed before broader production use.
