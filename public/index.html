@@ -6,6 +6,31 @@
   <!-- Auth0 Single Page App SDK -->
   <script src="https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js"></script>
   <style>
+    #mic-btn {
+      padding: 0 14px;
+      font-size: 18px;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    #mic-btn:hover {
+      background: #f1f5f9;
+    }
+    #mic-btn.recording {
+      background: #fee2e2;
+      border-color: #ef4444;
+      animation: pulse 1.2s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 20px auto; padding: 0 16px; background-color: #f8fafc; color: #0f172a; }
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
     h2 { margin: 0 0 4px 0; }
@@ -84,6 +109,7 @@
 
     <form id="chat-form">
       <input id="message-input" autocomplete="off" placeholder="Share your perspective in your native language..." />
+      <button type="button" id="mic-btn" onclick="toggleSpeech()" title="Speak message">🎙️</button>
       <button type="submit">Send</button>
     </form>
   </div>
@@ -102,10 +128,10 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     // ----------------------------------------------------
-    // AUTH0 CONFIGURATION (Paste your credentials here)
+    // AUTH0 CONFIGURATION
     // ----------------------------------------------------
-    const AUTH0_DOMAIN = 'dev-g6pjx8nhrgrmrkz3.us.auth0.com';       // e.g. dev-abcdefg.us.auth0.com
-    const AUTH0_CLIENT_ID = '7FU6wUqlnPKxwwufbakImcKwEdZRPnlZ'; // e.g. 9yH8...
+    const AUTH0_DOMAIN = 'dev-g6pjx8nhrgrmrkz3.us.auth0.com';
+    const AUTH0_CLIENT_ID = '7FU6wUqlnPKxwwufbakImcKwEdZRPnlZ';
 
     let auth0Client = null;
     let currentUser = null;
@@ -120,7 +146,6 @@
         }
       });
 
-      // Handle redirect callback from Auth0 login
       if (location.search.includes('state=') && (location.search.includes('code=') || location.search.includes('error='))) {
         await auth0Client.handleRedirectCallback();
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -162,6 +187,82 @@
     }
 
     // ----------------------------------------------------
+    // SPEECH RECOGNITION (VOICE INPUT)
+    // ----------------------------------------------------
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+    let isRecording = false;
+
+    // Map dropdown codes to speech recognition BCP-47 tags
+    const speechLangMap = {
+      en: 'en-US',
+      es: 'es-ES',
+      fr: 'fr-FR',
+      de: 'de-DE',
+      zh: 'zh-CN',
+      ar: 'ar-SA'
+    };
+
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => {
+        isRecording = true;
+        const micBtn = document.getElementById('mic-btn');
+        micBtn.classList.add('recording');
+        micBtn.innerText = '🔴';
+        input.placeholder = 'Listening... speak now';
+      };
+
+      recognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          transcript += event.results[i][0].transcript;
+        }
+        input.value = transcript;
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        stopSpeech();
+      };
+
+      recognition.onend = () => {
+        stopSpeech();
+      };
+    } else {
+      console.warn('Web Speech API is not supported in this browser.');
+      const micBtn = document.getElementById('mic-btn');
+      if (micBtn) micBtn.style.display = 'none';
+    }
+
+    function toggleSpeech() {
+      if (!recognition) {
+        alert('Voice input is not supported in this browser. Please use Chrome, Edge, or Safari.');
+        return;
+      }
+      if (isRecording) {
+        recognition.stop();
+      } else {
+        const langCode = langSelect.value;
+        recognition.lang = speechLangMap[langCode] || 'en-US';
+        recognition.start();
+      }
+    }
+
+    function stopSpeech() {
+      isRecording = false;
+      const micBtn = document.getElementById('mic-btn');
+      if (micBtn) {
+        micBtn.classList.remove('recording');
+        micBtn.innerText = '🎙️';
+      }
+      input.placeholder = 'Share your perspective in your native language...';
+    }
+
+    // ----------------------------------------------------
     // CHAT & PERSONALIZED LANGUAGE LOGIC
     // ----------------------------------------------------
     const form = document.getElementById('chat-form');
@@ -185,9 +286,8 @@
       card.className = 'message-card';
 
       const targetLang = langSelect.value;
-      let displayText = data.translated; // English baseline
+      let displayText = data.translated;
 
-      // If user selected a different language, translate on the fly
       if (targetLang !== 'en') {
         try {
           const res = await fetch('/api/translate', {
@@ -314,6 +414,7 @@
         await audio.play();
         btn.innerText = '▶ Playing...';
       } catch (err) {
+        console.error('Audio play error:', err);
         btn.disabled = false;
         btn.innerText = '❌ Failed';
         setTimeout(() => { btn.innerText = originalLabel; }, 2000);
