@@ -20,44 +20,51 @@ const messageHistory = [];
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('chat message', async (msg) => {
+    socket.on('chat message', async (data) => {
+    // Extract text and author whether data is a string or an object
+    const author = typeof data === 'object' && data.author ? data.author : 'Participant';
+    const textContent = typeof data === 'object' && data.text ? data.text : String(data);
+
     try {
-      const chatCompletion = await groq.chat.completions.create({
+        const chatCompletion = await groq.chat.completions.create({
         messages: [
-          {
+            {
             role: 'system',
             content:
-              'You are an AI civic mediator. You MUST respond with valid JSON only. ' +
-              'Translate the incoming message into clear English (if it is already English, keep it as is). ' +
-              'Analyze the emotional subtext and tone (e.g., Frustrated, Skeptical, Passionate, Constructive, Inquisitive, Calm). ' +
-              'Pick one single fitting emoji. ' +
-              'Schema: {"original": "...", "translated": "...", "tone": "...", "emoji": "..."}'
-          },
-          { role: 'user', content: msg }
+                'You are an AI civic mediator. You MUST respond with valid JSON only. ' +
+                'Translate the incoming message into clear English (if it is already English, keep it as is). ' +
+                'Analyze the emotional subtext and tone (e.g., Frustrated, Skeptical, Passionate, Constructive, Inquisitive, Calm). ' +
+                'Pick one single fitting emoji. ' +
+                'Schema: {"original": "...", "translated": "...", "tone": "...", "emoji": "..."}'
+            },
+            { 
+            role: 'user', 
+            content: textContent // Must be a string
+            }
         ],
         model: 'qwen/qwen3.8-27b',
         response_format: { type: 'json_object' },
         temperature: 0.2
-      });
+        });
 
-      const parsedData = JSON.parse(chatCompletion.choices[0].message.content);
-      
-      // Save to server history for summarization
-      messageHistory.push(parsedData);
-      
-      io.emit('chat message', parsedData);
+        const parsedData = JSON.parse(chatCompletion.choices[0].message.content);
+        parsedData.author = author;
+
+        messageHistory.push(parsedData);
+        io.emit('chat message', parsedData);
     } catch (error) {
-      console.error('Groq processing error detail:', error);
-      const fallback = {
-        original: msg,
-        translated: msg,
+        console.error('Groq processing error detail:', error);
+        const fallback = {
+        author,
+        original: textContent,
+        translated: textContent,
         tone: 'Direct',
         emoji: '💬'
-      };
-      messageHistory.push(fallback);
-      io.emit('chat message', fallback);
+        };
+        messageHistory.push(fallback);
+        io.emit('chat message', fallback);
     }
-  });
+    }); 
 });
 
 // ElevenLabs Text-to-Speech Route
@@ -213,6 +220,33 @@ app.get('/api/summarize', async (req, res) => {
   } catch (err) {
     console.error('Summarize error:', err);
     res.status(500).json({ summary: 'Failed to generate civic discourse summary.' });
+  }
+});
+
+// Dynamic per-user translation endpoint
+app.post('/api/translate', async (req, res) => {
+  const { text, targetLang } = req.body;
+  if (!text || !targetLang || targetLang === 'en') {
+    return res.json({ translated: text });
+  }
+
+  try {
+    const response = await groq.chat.completions.create({
+      messages: [
+        {
+          role: 'system',
+          content: `Translate the input text accurately into ${targetLang}. Return ONLY the translated string with no quotes, commentary, or markdown.`
+        },
+        { role: 'user', content: text }
+      ],
+      model: 'qwen/qwen3.8-27b',
+      temperature: 0.2
+    });
+
+    res.json({ translated: response.choices[0].message.content.trim() });
+  } catch (err) {
+    console.error('Target translation error:', err);
+    res.json({ translated: text });
   }
 });
 

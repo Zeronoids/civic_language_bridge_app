@@ -2,16 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Civic Bridge - Dialogue & Live Verification</title>
+  <title>Civic Bridge - Multilingual Discourse</title>
+  <!-- Auth0 Single Page App SDK -->
+  <script src="https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js"></script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 680px; margin: 20px auto; padding: 0 16px; background-color: #f8fafc; color: #0f172a; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 20px auto; padding: 0 16px; background-color: #f8fafc; color: #0f172a; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
     h2 { margin: 0 0 4px 0; }
     p.subtitle { color: #64748b; margin: 0; font-size: 14px; }
+    .user-bar { display: flex; align-items: center; gap: 8px; background: #fff; padding: 6px 12px; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 13px; }
+    .user-bar select { border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px 8px; font-size: 13px; }
+    .btn-auth { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-auth.logout { background: #ef4444; }
     .summary-btn { background: #0f172a; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .summary-btn:hover { background: #334155; }
+    
+    #auth-overlay { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 40px 20px; text-align: center; margin-top: 40px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    #chat-section { display: none; }
+
     #messages { list-style-type: none; padding: 0; min-height: 380px; max-height: 480px; overflow-y: auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 14px; }
     .message-card { background: #f1f5f9; padding: 14px; border-radius: 8px; border-left: 4px solid #3b82f6; position: relative; }
+    .author-line { font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 4px; }
     .translated-text { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
     .original-text { font-size: 13px; color: #64748b; font-style: italic; margin-bottom: 10px; }
     .card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; flex-wrap: wrap; gap: 8px; }
@@ -25,37 +36,63 @@
     .status-Questionable { background: #fee2e2; color: #991b1b; }
     .status-Needs { background: #fef3c7; color: #92400e; }
     .source-link { display: inline-block; margin-right: 8px; margin-top: 4px; color: #2563eb; text-decoration: none; font-size: 12px; }
-    .source-link:hover { text-decoration: underline; }
     form { display: flex; gap: 8px; }
     input { flex-grow: 1; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 15px; }
     button[type="submit"] { padding: 12px 20px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 600; }
-    /* Modal for Summary */
+    
     .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; padding: 16px; }
     .modal-content { background: #fff; max-width: 600px; width: 100%; border-radius: 8px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-height: 80vh; overflow-y: auto; }
     .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   </style>
 </head>
 <body>
+
   <div class="header">
     <div>
       <h2>Civic Bridge</h2>
-      <p class="subtitle">Real-time civic mediation, tone projection & live source RAG</p>
+      <p class="subtitle">AI-mediated civic dialogue across languages</p>
     </div>
-    <button class="summary-btn" onclick="openSummary()">⚖️ Summarize Discourse</button>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <button class="summary-btn" onclick="openSummary()">⚖️ Summarize</button>
+      <div id="auth-controls"></div>
+    </div>
   </div>
-  
-  <ul id="messages"></ul>
 
-  <form id="chat-form">
-    <input id="message-input" autocomplete="off" placeholder="Type a perspective or claim in any language..." />
-    <button type="submit">Send</button>
-  </form>
+  <!-- Signed Out Screen -->
+  <div id="auth-overlay">
+    <h3>Sign in to Join the Civic Dialogue</h3>
+    <p style="color: #64748b; margin-bottom: 20px;">Authenticated via Auth0. Set your native language to participate.</p>
+    <button class="btn-auth" style="padding: 10px 20px; font-size: 15px;" onclick="login()">Log In with Auth0</button>
+  </div>
+
+  <!-- Signed In Chat Room -->
+  <div id="chat-section">
+    <div class="user-bar" style="margin-bottom: 12px;">
+      <span>Logged in as: <strong id="username-display">User</strong></span>
+      <span style="margin-left: auto;">Translate incoming to:</span>
+      <select id="user-lang-select">
+        <option value="en" selected>English</option>
+        <option value="es">Spanish (Español)</option>
+        <option value="fr">French (Français)</option>
+        <option value="de">German (Deutsch)</option>
+        <option value="zh">Chinese (中文)</option>
+        <option value="ar">Arabic (العربية)</option>
+      </select>
+    </div>
+
+    <ul id="messages"></ul>
+
+    <form id="chat-form">
+      <input id="message-input" autocomplete="off" placeholder="Share your perspective in your native language..." />
+      <button type="submit">Send</button>
+    </form>
+  </div>
 
   <!-- Summary Modal -->
   <div id="summary-modal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3 style="margin: 0;">Unbiased Discourse Summary</h3>
+        <h3 style="margin: 0;">Unbiased Civic Summary</h3>
         <button onclick="closeSummary()" style="cursor: pointer; border: none; background: none; font-size: 18px;">✕</button>
       </div>
       <div id="summary-body" style="white-space: pre-wrap; line-height: 1.5; font-size: 14px; color: #334155;">Loading...</div>
@@ -64,25 +101,110 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
+    // ----------------------------------------------------
+    // AUTH0 CONFIGURATION (Paste your credentials here)
+    // ----------------------------------------------------
+    const AUTH0_DOMAIN = 'dev-g6pjx8nhrgrmrkz3.us.auth0.com';       // e.g. dev-abcdefg.us.auth0.com
+    const AUTH0_CLIENT_ID = '7FU6wUqlnPKxwwufbakImcKwEdZRPnlZ'; // e.g. 9yH8...
+
+    let auth0Client = null;
+    let currentUser = null;
     const socket = io();
+
+    async function initAuth0() {
+      auth0Client = await auth0.createAuth0Client({
+        domain: AUTH0_DOMAIN,
+        clientId: AUTH0_CLIENT_ID,
+        authorizationParams: {
+          redirect_uri: window.location.origin
+        }
+      });
+
+      // Handle redirect callback from Auth0 login
+      if (location.search.includes('state=') && (location.search.includes('code=') || location.search.includes('error='))) {
+        await auth0Client.handleRedirectCallback();
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+
+      const isAuthenticated = await auth0Client.isAuthenticated();
+      if (isAuthenticated) {
+        currentUser = await auth0Client.getUser();
+        showChat();
+      } else {
+        showLogin();
+      }
+    }
+
+    function showLogin() {
+      document.getElementById('auth-overlay').style.display = 'block';
+      document.getElementById('chat-section').style.display = 'none';
+      document.getElementById('auth-controls').innerHTML = '';
+    }
+
+    function showChat() {
+      document.getElementById('auth-overlay').style.display = 'none';
+      document.getElementById('chat-section').style.display = 'block';
+      document.getElementById('username-display').innerText = currentUser.name || currentUser.nickname || currentUser.email;
+
+      document.getElementById('auth-controls').innerHTML = `
+        <button class="btn-auth logout" onclick="logout()">Log Out</button>
+      `;
+    }
+
+    async function login() {
+      await auth0Client.loginWithRedirect();
+    }
+
+    async function logout() {
+      await auth0Client.logout({
+        logoutParams: { returnTo: window.location.origin }
+      });
+    }
+
+    // ----------------------------------------------------
+    // CHAT & PERSONALIZED LANGUAGE LOGIC
+    // ----------------------------------------------------
     const form = document.getElementById('chat-form');
     const input = document.getElementById('message-input');
     const messages = document.getElementById('messages');
+    const langSelect = document.getElementById('user-lang-select');
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       if (input.value.trim()) {
-        socket.emit('chat message', input.value.trim());
+        socket.emit('chat message', {
+          author: currentUser ? (currentUser.name || currentUser.nickname) : 'Anonymous',
+          text: input.value.trim()
+        });
         input.value = '';
       }
     });
 
-    socket.on('chat message', (data) => {
+    socket.on('chat message', async (data) => {
       const card = document.createElement('li');
       card.className = 'message-card';
+
+      const targetLang = langSelect.value;
+      let displayText = data.translated; // English baseline
+
+      // If user selected a different language, translate on the fly
+      if (targetLang !== 'en') {
+        try {
+          const res = await fetch('/api/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: data.translated, targetLang })
+          });
+          const json = await res.json();
+          displayText = json.translated;
+        } catch (e) {
+          console.error(e);
+        }
+      }
       
       card.innerHTML = `
-        <div class="translated-text">${data.translated}</div>
+        <div class="author-line">${data.author || 'Participant'}</div>
+        <div class="translated-text">${displayText}</div>
         <div class="original-text">Original: "${data.original}"</div>
         <div class="card-footer">
           <span class="badge">${data.emoji} ${data.tone}</span>
@@ -90,7 +212,7 @@
             <button class="btn-action" onclick="verifyClaim('${encodeURIComponent(data.translated)}', this)">
               🔍 Check Evidence
             </button>
-            <button class="btn-action" onclick="playAudio('${encodeURIComponent(data.translated)}', '${encodeURIComponent(data.tone)}', this)">
+            <button class="btn-action" onclick="playAudio('${encodeURIComponent(displayText)}', '${encodeURIComponent(data.tone)}', this)">
               🔊 Listen
             </button>
           </div>
@@ -102,14 +224,17 @@
       messages.scrollTop = messages.scrollHeight;
     });
 
+    // ----------------------------------------------------
+    // FACT CHECK, TTS & SUMMARY HELPERS
+    // ----------------------------------------------------
     async function verifyClaim(encodedText, btn) {
       const claim = decodeURIComponent(encodedText);
       const box = btn.closest('.message-card').querySelector('.factcheck-box');
       
       btn.disabled = true;
-      btn.innerText = '🔍 Checking Web...';
+      btn.innerText = '🔍 Checking...';
       box.style.display = 'block';
-      box.innerHTML = '<em>Searching web sources and verifying evidence...</em>';
+      box.innerHTML = '<em>Searching references and verifying context...</em>';
 
       try {
         const res = await fetch('/api/factcheck', {
@@ -143,14 +268,18 @@
       const modal = document.getElementById('summary-modal');
       const body = document.getElementById('summary-body');
       modal.style.display = 'flex';
-      body.innerText = 'Generating neutral perspective synthesis...';
+      body.innerHTML = '<em>Analyzing dialogue, viewpoints, and common ground...</em>';
 
       try {
         const res = await fetch('/api/summarize');
         const data = await res.json();
-        body.innerText = data.summary;
+        let formatted = data.summary
+          .replace(/^### (.*$)/gim, '<h4 style="margin: 12px 0 6px 0; color: #1e293b;">$1</h4>')
+          .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+          .replace(/\n/gim, '<br>');
+        body.innerHTML = formatted;
       } catch (err) {
-        body.innerText = 'Error generating discourse summary.';
+        body.innerHTML = '<span style="color: red;">Error generating summary.</span>';
       }
     }
 
@@ -178,21 +307,20 @@
         const blob = await res.blob();
         const audioUrl = URL.createObjectURL(blob);
         const audio = new Audio(audioUrl);
-        
         audio.onended = () => {
           btn.disabled = false;
           btn.innerText = originalLabel;
         };
-
         await audio.play();
         btn.innerText = '▶ Playing...';
       } catch (err) {
-        console.error('Audio play error:', err);
         btn.disabled = false;
         btn.innerText = '❌ Failed';
         setTimeout(() => { btn.innerText = originalLabel; }, 2000);
       }
     }
+
+    window.onload = initAuth0;
   </script>
 </body>
 </html>
