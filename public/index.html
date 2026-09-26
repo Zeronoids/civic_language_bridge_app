@@ -43,7 +43,7 @@
         </aside>
         <section class="conversation" aria-label="Current conversation">
           <header class="conversation-header"><div><p class="eyebrow">SHARED DIALOGUE</p><h1 id="conversation-title">Your conversation</h1><p class="quiet">Shared space &middot; Accessible to everyone</p></div><button class="summary-btn" onclick="openSummary()">&#10023; Find common ground</button></header>
-          <div class="language-bar"><span><span class="connection-dot" aria-hidden="true"></span><span id="connection-status" role="status">Connecting...</span></span><div><label for="user-lang-select">Read &amp; speak in</label><select id="user-lang-select"><option value="en">English</option><option value="es">Espa&#241;ol</option><option value="fr">Fran&#231;ais</option><option value="de">Deutsch</option><option value="zh">&#20013;&#25991;</option><option value="ar">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</option></select></div></div>
+          <p id="community-question" class="community-question"></p><div class="language-bar"><span><span class="connection-dot" aria-hidden="true"></span><span id="connection-status" role="status">Connecting...</span></span><div><label for="user-lang-select">Read &amp; speak in</label><select id="user-lang-select"><option value="en">English</option><option value="es">Espa&#241;ol</option><option value="fr">Fran&#231;ais</option><option value="de">Deutsch</option><option value="zh">&#20013;&#25991;</option><option value="ar">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</option></select></div></div>
           <ul id="messages" aria-label="Messages"></ul>
           <div class="composer">
             <form id="chat-form"><label class="sr-only" for="message-input">Your message</label><input id="message-input" maxlength="5000" autocomplete="off" placeholder="Share a thought. Ask a question. Build understanding." /><div class="composer-actions"><button type="button" id="mic-btn" onclick="toggleSpeech()" aria-label="Start or stop microphone" aria-pressed="false" title="Dictate a message">&#127897;</button><button type="submit">Send <span aria-hidden="true">&#8593;</span></button></div></form>
@@ -69,7 +69,17 @@
 
     let auth0Client = null;
     let currentUser = null;
-    const socket = io();
+    let participantToken;
+    try {
+      participantToken = localStorage.getItem('civic-participant-token');
+      if (!participantToken) {
+        participantToken = window.crypto?.randomUUID();
+        if (participantToken) localStorage.setItem('civic-participant-token', participantToken);
+      }
+    } catch (_) { participantToken = window.crypto?.randomUUID(); }
+    const socket = io({ auth: { participantToken } });
+    let participantId = null;
+    socket.on('participant identity', id => { participantId = id; });
 
     async function initAuth0() {
       auth0Client = await auth0.createAuth0Client({
@@ -216,7 +226,9 @@
     let desiredChatId = null;
     let knownChats = [];
     function updateConversationTitle() {
-      document.getElementById('conversation-title').textContent = knownChats.find(chat => chat.id === activeChatId)?.title || 'Your conversation';
+      const chat = knownChats.find(chat => chat.id === activeChatId);
+      document.getElementById('conversation-title').textContent = chat?.title || 'Your conversation';
+      document.getElementById('community-question').textContent = chat?.question ? 'Community question: ' + chat.question : 'What could this community understand or improve together?';
     }
     socket.on('connect', () => { document.getElementById('connection-status').textContent = 'Connected'; });
     try { desiredChatId = localStorage.getItem('civic-chat'); } catch (_) {}
@@ -243,7 +255,11 @@
     document.getElementById('new-chat').addEventListener('click', () => {
       if (!socket.connected) return alert('Reconnect before creating a chat.');
       const title = prompt('Name this conversation (up to 80 characters):');
-      if (title && title.trim()) socket.emit('create chat', title.trim());
+      if (title && title.trim()) {
+        const question = prompt('What community question will this conversation explore? (Optional, up to 300 characters)');
+        if (question === null) return;
+        socket.emit('create chat', { title: title.trim(), question });
+      }
     });
     langSelect.addEventListener('change', () => { stopSpeech(); if (activeChatId) socket.emit('join chat', activeChatId); });
 
@@ -272,33 +288,53 @@
 
     socket.on('chat error', message => alert(message));
 
+    const translationCache = new Map();
+    let translationQueue = Promise.resolve();
+    function translateMessage(text, targetLang, card) {
+      const key = JSON.stringify([targetLang, text]);
+      if (translationCache.has(key)) return Promise.resolve(translationCache.get(key));
+      const pending = translationQueue.then(async () => {
+        if (!card.isConnected) return text;
+        if (translationCache.has(key)) return translationCache.get(key);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (!card.isConnected) return text;
+          const res = await fetch('/api/translate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, targetLang })
+          });
+          if (res.ok) {
+            const json = await res.json();
+            if (typeof json.translated !== 'string' || !json.translated.trim()) throw new Error('Empty translation');
+            translationCache.set(key, json.translated);
+            if (translationCache.size > 500) translationCache.delete(translationCache.keys().next().value);
+            return json.translated;
+          }
+          if (attempt === 2 || (res.status !== 429 && res.status < 500)) throw new Error('Translation failed');
+          const retryAfter = Number(res.headers.get('Retry-After')) || 2 ** (attempt + 1);
+          await new Promise(resolve => setTimeout(resolve, Math.min(retryAfter, 30) * 1000));
+        }
+      });
+      translationQueue = pending.catch(() => {});
+      return pending;
+    }
+
+    const toneCards = new Map();
+    socket.on('tone updated', data => toneCards.get(data.messageId)?.(data.state));
+
     // Helper to render message cards
     async function renderMessage(data) {
       const card = document.createElement('li');
       card.className = 'message-card';
+      if (data.id) card.id = 'message-' + data.id;
 
       messages.appendChild(card); // Reserve its position before translation finishes.
       const targetLang = langSelect ? langSelect.value : 'en';
       let displayText = data.translated;
 
-      if (targetLang !== 'en') {
-        try {
-          const res = await fetch('/api/translate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: data.translated, targetLang })
-          });
-          if (!res.ok) throw new Error('Translation failed');
-          const json = await res.json();
-          if (typeof json.translated === 'string') displayText = json.translated;
-        } catch (e) {
-          console.error(e);
-        }
-      }
-
       card.innerHTML = `
         <div class="author-line"><span class="message-avatar" aria-hidden="true">${escapeHtml((data.author || 'P').slice(0, 1).toUpperCase())}</span>${escapeHtml(data.author || 'Participant')}<span class="message-label">Perspective</span></div>
         <div class="translated-text" dir="auto">${escapeHtml(displayText)}</div>
+        <div class="translation-status quiet" role="status"></div>
         <details class="original-text"><summary>View original message</summary><p dir="auto">${escapeHtml(data.original)}</p></details>
         <div class="card-footer">
           <span class="badge">${escapeHtml(data.emoji)} ${escapeHtml(data.tone)}<span class="tone-label"> &middot; AI tone</span></span>
@@ -311,11 +347,53 @@
             </button>
           </div>
         </div>
+        <div class="tone-controls"></div>
         <div class="factcheck-box" style="display: none;"></div>
       `;
 
       card.querySelector('[data-action="verify"]').addEventListener('click', event => verifyClaim(data.translated, event.currentTarget));
-      card.querySelector('[data-action="listen"]').addEventListener('click', event => playAudio(displayText, data.tone, event.currentTarget));
+      const badge = card.querySelector('.badge');
+      const originalBadge = badge.innerHTML;
+      const applyTone = state => {
+        data.toneFeedback = state;
+        badge.hidden = state === 'hidden';
+        badge.innerHTML = state === 'disputed' ? 'Speaker disputes AI tone' : originalBadge;
+      };
+      applyTone(data.toneFeedback);
+      if (data.id) toneCards.set(data.id, applyTone);
+      if (participantId && data.participantId === participantId) {
+        const controls = card.querySelector('.tone-controls');
+        for (const [state, label] of [['hidden', 'Hide my tone'], ['disputed', 'Dispute my tone'], ['visible', 'Show AI tone']]) {
+          const button = document.createElement('button');
+          button.className = 'btn-action'; button.textContent = label;
+          button.addEventListener('click', () => socket.emit('tone feedback', { messageId: data.id, state }));
+          controls.appendChild(button);
+        }
+      }
+      const listenButton = card.querySelector('[data-action="listen"]');
+      listenButton.addEventListener('click', event => playAudio(displayText, ['hidden', 'disputed'].includes(data.toneFeedback) ? 'Direct' : data.tone, event.currentTarget));
+      if (targetLang !== 'en') {
+        const status = card.querySelector('.translation-status');
+        const updateTranslation = async () => {
+          status.textContent = 'Translating...';
+          listenButton.disabled = true;
+          try {
+            displayText = await translateMessage(data.translated, targetLang, card);
+            if (!card.isConnected) return;
+            card.querySelector('.translated-text').textContent = displayText;
+            status.textContent = '';
+          } catch (error) {
+            if (!card.isConnected) return;
+            status.textContent = 'Translation unavailable. Showing source text. ';
+            const retry = document.createElement('button');
+            retry.className = 'btn-action';
+            retry.textContent = 'Retry translation';
+            retry.addEventListener('click', updateTranslation);
+            status.appendChild(retry);
+          } finally { listenButton.disabled = false; }
+        };
+        await updateTranslation();
+      }
     }
 
     // Load full history when joining or refreshing
@@ -326,6 +404,7 @@
       updateConversationTitle();
       try { localStorage.setItem('civic-chat', chatId); } catch (_) {}
       messages.innerHTML = '';
+      toneCards.clear();
       await Promise.all(history.map(renderMessage));
       messages.scrollTop = messages.scrollHeight;
     });
@@ -378,6 +457,40 @@
       }
     }
 
+    let shownSummary = null;
+    function renderSummaryFeedback() {
+      const panel = document.getElementById('summary-feedback');
+      if (!panel || !shownSummary) return;
+      panel.replaceChildren();
+      const note = document.createElement('p');
+      note.className = 'quiet';
+      note.textContent = 'AI-suggested common ground, not a collective decision. Silence is not agreement. Responses use browser-linked identity, not verified identity.';
+      panel.appendChild(note);
+      for (const feedback of shownSummary.feedback || []) {
+        const item = document.createElement('p');
+        item.textContent = feedback.author + (feedback.state === 'confirmed' ? ': This captures my view.' : ': Clarification: ' + feedback.text);
+        panel.appendChild(item);
+      }
+      if (!shownSummary.feedback?.length) {
+        const empty = document.createElement('p'); empty.textContent = 'No participant responses yet.'; panel.appendChild(empty);
+      }
+      if (shownSummary.participants?.includes(participantId)) {
+        for (const [state, label] of [['confirmed', 'That captures my view'], ['clarified', 'Clarify my view']]) {
+          const button = document.createElement('button'); button.className = 'btn-action'; button.textContent = label;
+          button.addEventListener('click', () => {
+            const text = state === 'clarified' ? prompt('What did this summary miss or misunderstand about your perspective?') : '';
+            if (state === 'clarified' && !text?.trim()) return;
+            socket.emit('summary feedback', { summaryId: shownSummary.id, state, text });
+          });
+          panel.appendChild(button);
+        }
+      }
+    }
+    socket.on('summary feedback updated', data => {
+      if (shownSummary?.id !== data.summaryId) return;
+      shownSummary.feedback = data.feedback;
+      renderSummaryFeedback();
+    });
     let summaryRequest = 0;
     let summaryTrigger = null;
     async function openSummary() {
@@ -400,6 +513,25 @@
           .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
           .replace(/\n/gim, '<br>');
         body.innerHTML = formatted;
+        shownSummary = data;
+        if (data.id) {
+          const sources = document.createElement('details');
+          const heading = document.createElement('summary'); heading.textContent = 'Messages behind this summary'; sources.appendChild(heading);
+          for (const source of data.sources || []) {
+            const item = document.createElement('p');
+            const link = document.createElement('button'); link.className = 'btn-action';
+            link.textContent = '[Message ' + source.number + '] ' + source.author;
+            link.addEventListener('click', () => {
+              const card = document.getElementById('message-' + source.id);
+              if (card) { closeSummary(); card.scrollIntoView({ block: 'center' }); card.tabIndex = -1; card.focus(); }
+            });
+            item.appendChild(link);
+            const quote = document.createElement('span'); quote.textContent = ': ' + source.text; item.appendChild(quote); sources.appendChild(item);
+          }
+          body.appendChild(sources);
+          const feedback = document.createElement('section'); feedback.id = 'summary-feedback'; body.appendChild(feedback);
+          renderSummaryFeedback();
+        }
       } catch (err) {
         if (requestId !== summaryRequest) return;
         body.innerHTML = '<span style="color: red;">Error generating summary.</span>';
@@ -450,7 +582,12 @@
     });
     document.getElementById('summary-modal').addEventListener('keydown', event => {
       if (event.key === 'Escape') closeSummary();
-      if (event.key === 'Tab') { event.preventDefault(); document.querySelector('.close-modal').focus(); }
+      if (event.key === 'Tab') {
+        const items = [...event.currentTarget.querySelectorAll('button, summary')].filter(item => item.getClientRects().length);
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
     });
 
     window.onload = () => initAuth0().catch(error => {

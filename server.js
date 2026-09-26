@@ -16,7 +16,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Shared saved conversations. CHAT_FILE can point to persistent storage.
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
 const CHAT_FILE = process.env.CHAT_FILE || path.join(__dirname, 'chats.json');
 let chats = [{ id: 'general', title: 'General discussion', messages: [] }];
 if (fs.existsSync(CHAT_FILE)) {
@@ -30,12 +30,16 @@ function saveHistory() {
   fs.writeFileSync(CHAT_FILE + '.tmp', JSON.stringify({ version: 2, chats }, null, 2));
   fs.renameSync(CHAT_FILE + '.tmp', CHAT_FILE);
 }
-const chatList = () => chats.map(({ id, title }) => ({ id, title }));
+const chatList = () => chats.map(({ id, title, question }) => ({ id, title, question }));
 const queues = new Map();
 
 // WebSocket Handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+  const token = socket.handshake?.auth?.participantToken;
+  const participantId = typeof token === 'string' && token.length >= 32 && token.length <= 200
+    ? createHash('sha256').update(token).digest('hex') : null;
+  socket.emit('participant identity', participantId);
 
   // Send prior conversation to newly joined client
   socket.emit('chat list', chatList());
@@ -48,9 +52,11 @@ io.on('connection', (socket) => {
     socket.emit('chat history', { chatId: id, messages: chat.messages });
   }
   socket.on('join chat', joinChat);
-  socket.on('create chat', title => {
+  socket.on('create chat', payload => {
+    const title = typeof payload === 'string' ? payload : payload?.title;
+    const question = typeof payload?.question === 'string' ? payload.question.trim().slice(0, 300) : '';
     if (typeof title !== 'string' || !title.trim() || title.length > 80) return socket.emit('chat error', 'Use a chat title of 1 to 80 characters.');
-    const chat = { id: randomUUID(), title: title.trim(), messages: [] };
+    const chat = { id: randomUUID(), title: title.trim(), question, messages: [] };
     chats.push(chat);
     try { saveHistory(); }
     catch (error) {
@@ -60,6 +66,28 @@ io.on('connection', (socket) => {
     }
     io.emit('chat list', chatList());
     joinChat(chat.id);
+  });
+
+  socket.on('tone feedback', data => {
+    const chat = chats.find(c => c.id === socket.data.chatId);
+    const message = chat?.messages.find(m => m.id === data?.messageId);
+    if (!participantId || !message || message.participantId !== participantId || !['hidden', 'disputed', 'visible'].includes(data.state)) return;
+    const previous = message.toneFeedback;
+    message.toneFeedback = data.state;
+    try { saveHistory(); } catch (_) { message.toneFeedback = previous; return socket.emit('chat error', 'Could not save tone feedback.'); }
+    io.to(chat.id).emit('tone updated', { messageId: message.id, state: data.state });
+  });
+  socket.on('summary feedback', data => {
+    const chat = chats.find(c => c.id === socket.data.chatId);
+    const snapshot = chat?.summaries?.find(item => item.id === data?.summaryId);
+    if (!participantId || !snapshot || !snapshot.participants.includes(participantId) || !['confirmed', 'clarified'].includes(data.state)) return socket.emit('chat error', 'Only participants represented in this summary can respond.');
+    const clarification = typeof data.text === 'string' ? data.text.trim().slice(0, 1500) : '';
+    if (data.state === 'clarified' && !clarification) return;
+    const author = chat.messages.find(m => m.participantId === participantId)?.author || 'Participant';
+    const previous = snapshot.feedback;
+    snapshot.feedback = [...previous.filter(f => f.participantId !== participantId), { participantId, author, state: data.state, text: clarification }];
+    try { saveHistory(); } catch (_) { snapshot.feedback = previous; return socket.emit('chat error', 'Could not save summary feedback.'); }
+    io.to(chat.id).emit('summary feedback updated', { summaryId: snapshot.id, feedback: snapshot.feedback });
   });
 
   socket.on('chat message', (data) => {
@@ -112,6 +140,7 @@ io.on('connection', (socket) => {
       };
       outgoing = fallback;
     }
+    outgoing.participantId = participantId;
     outgoing.id = randomUUID();
     outgoing.chatId = chat.id;
     chat.messages.push(outgoing);
@@ -215,9 +244,9 @@ app.post('/api/factcheck', async (req, res) => {
           role: 'system',
           content:
             `You are an impartial civic fact-checker. Respond with JSON only. ` +
-            `Evaluate the user claim strictly against the provided reference evidence. ` +
+            `Evaluate the user claim strictly against the provided reference evidence. Search snippets are incomplete; use Insufficient evidence when they do not directly establish the claim. ` +
             `Write the status and explanation in the target language: "${language}". ` +
-            `Status must be the localized equivalent of ("Verified", "Questionable", or "Needs Context"). ` +
+            `Status must be the localized equivalent of ("Supported by retrieved references", "Conflicting evidence", or "Insufficient evidence"). ` +
             `Provide a concise 1-2 sentence neutral explanation in "${language}". ` +
             `Schema: {"status": "...", "explanation": "...", "sources": [{"title": "...", "url": "..."}]}`
         },
@@ -252,9 +281,13 @@ app.get('/api/summarize', async (req, res) => {
     });
   }
 
-  // Format full dialogue with tones for the model
+  const revision = chat.messages.length;
+  const cached = chat.summaries?.find(item => item.revision === revision);
+  if (cached) return res.json(cached);
+  const sources = messageHistory.map((m, index) => ({ number: index + 1, id: m.id, author: m.author || 'Participant', text: m.original, participantId: m.participantId }));
+  // Include speaker attribution and stable message references.
   const dialogue = messageHistory
-    .map((m, idx) => `[Message ${idx + 1}] "${m.translated}" (Tone: ${m.tone})`)
+    .map((m, idx) => `[Message ${idx + 1}] ${m.author || "Participant"}: "${m.translated}"`)
     .join('\n');
 
   try {
@@ -265,18 +298,25 @@ app.get('/api/summarize', async (req, res) => {
           content:
             'You are a neutral civic mediator specializing in constructive debate and conflict resolution. ' +
             'Analyze the provided chat dialogue and produce a fair, balanced, and impartial summary. ' +
-            'Use markdown formatting with these exact sections:\n' +
-            '### 📌 Core Perspectives\n(Summarize the different arguments presented without taking sides)\n\n' +
-            '### ⚡ Key Friction Points\n(Highlight where values, facts, or priorities clash)\n\n' +
-            '### 🤝 Common Ground & Shared Values\n(Identify any mutual interests, shared goals, or bridge opportunities)'
+            'Use markdown headings: Core Perspectives, Key Friction Points, AI-suggested Common Ground, Open Questions, Suggested Next Step. ' +
+            'Attribute each perspective to its speaker and cite supporting messages as [Message N]. ' +
+            'Never infer agreement from silence. Common ground and next steps are tentative suggestions, not collective decisions. ' +
+            'Include unresolved differences and uncertainties. Suggest one feasible civic action without assigning commitments.'
         },
-        { role: 'user', content: `Dialogue:\n${dialogue}` }
+        { role: 'user', content: `Community question: ${chat.question || chat.title}\nDialogue:\n${dialogue}` }
       ],
       model: 'qwen/qwen3.8-27b',
       temperature: 0.2
     });
 
-    res.json({ summary: response.choices[0].message.content });
+    const concurrent = chat.summaries?.find(item => item.revision === revision);
+    if (concurrent) return res.json(concurrent);
+    const snapshot = { id: randomUUID(), revision, summary: response.choices[0].message.content,
+      sources, participants: [...new Set(sources.map(m => m.participantId).filter(Boolean))], feedback: [] };
+    chat.summaries ||= [];
+    chat.summaries.push(snapshot);
+    try { saveHistory(); } catch (error) { chat.summaries.pop(); throw error; }
+    res.json(snapshot);
   } catch (err) {
     console.error('Summarize error:', err);
     res.status(500).json({ summary: 'Failed to generate civic discourse summary.' });
@@ -305,10 +345,14 @@ app.post('/api/translate', async (req, res) => {
       temperature: 0.2
     });
 
-    res.json({ translated: response.choices[0].message.content.trim() });
+    const translated = response.choices[0]?.message?.content?.trim();
+    if (!translated) throw new Error('Empty translation response');
+    res.json({ translated });
   } catch (err) {
     console.error('Target translation error:', err);
-    res.json({ translated: text });
+    const status = err.status === 429 ? 429 : 503;
+    res.set('Retry-After', '3');
+    res.status(status).json({ error: 'Translation temporarily unavailable' });
   }
 });
 

@@ -119,3 +119,13 @@ tests/chat-and-speech.test.js   Mocked regression checks
 - Translations, tone interpretations, evidence assessments, and summaries can be incorrect. Original wording and participant clarification remain essential.
 - Evidence checks use Wikipedia search snippets, not comprehensive research or authoritative verification.
 - Storage and message delivery assume one server instance. External persistence, access controls, and abuse protection are needed before broader production use.
+
+## Participant judgment and civic questions
+
+New conversations can include a community question. Summaries attribute perspectives to speakers and request numbered message references, open questions, and one suggested next step. The source-message list lets participants revisit the original words.
+
+Participants represented in a summary can choose **That captures my view** or **Clarify my view**. Responses are saved alongside that specific summary and shared live. New messages produce a new summary version; earlier confirmations do not transfer. Common ground remains AI-suggested, and silence never counts as agreement.
+
+Message authors can hide or dispute their tone label, or restore it. Hidden/disputed labels also stop influencing voice playback settings. Evidence assessments now use **Supported by retrieved references**, **Conflicting evidence**, or **Insufficient evidence**, with an instruction to account for the limits of search snippets.
+
+Feedback ownership uses a random browser token, hashed on the server. It is not verified Auth0 identity, a vote, or proof of consensus. Changing browsers or clearing local storage loses access to that browser's feedback controls. Existing messages created before this feature have no ownership token. Server-side verified identity remains future work.
