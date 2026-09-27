@@ -4,13 +4,13 @@ const path = require('path');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const Groq = require('groq-sdk');
+const Gemini = require('./gemini');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 20000, maxRetries: 0 });
+const gemini = new Gemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-2.5-flash', timeout: 30000 });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -103,25 +103,18 @@ io.on('connection', (socket) => {
     let outgoing;
 
     try {
-      const chatCompletion = await groq.chat.completions.create({
+      const response = await gemini.chat.completions.create({
         messages: [
-          {
-            role: 'system',
-            content:
-              'You are an AI civic mediator. You MUST respond with valid JSON only. ' +
-              'Translate the incoming message into clear English (if it is already English, keep it as is). ' +
-              'Analyze the emotional subtext and tone (e.g., Frustrated, Skeptical, Passionate, Constructive, Inquisitive, Calm). ' +
-              'Pick one single fitting emoji. ' +
-              'Schema: {"original": "...", "translated": "...", "tone": "...", "emoji": "..."}'
-          },
+          { role: 'system', content:
+            'You are an AI civic mediator. Respond with valid JSON only. ' +
+            'Translate the incoming message into clear English (if already English, keep it as is). ' +
+            'Analyze the emotional subtext and tone. Pick one fitting emoji. ' +
+            'Schema: {"original":"...","translated":"...","tone":"...","emoji":"..."}' },
           { role: 'user', content: textContent }
         ],
-        model: 'qwen/qwen3.8-27b',
-        response_format: { type: 'json_object' },
-        temperature: 0.2
+        response_format: { type: 'json_object' }, temperature: 0.2
       });
-
-      const parsedData = JSON.parse(chatCompletion.choices[0].message.content);
+      const parsedData = JSON.parse(response.choices[0].message.content);
       if (!parsedData || ['translated', 'tone', 'emoji'].some(key => typeof parsedData[key] !== 'string')) {
         throw new Error('Invalid mediator response');
       }
@@ -130,7 +123,7 @@ io.on('connection', (socket) => {
 
       outgoing = parsedData;
     } catch (error) {
-      console.error('Groq processing error detail:', error);
+      console.error('Gemini processing error detail:', error);
       const fallback = {
         author,
         original: textContent,
@@ -219,7 +212,7 @@ app.post('/api/factcheck', async (req, res) => {
   const language = targetLang || 'en';
   if (!['en', 'es', 'fr', 'de', 'zh', 'ar'].includes(language)) return res.status(400).json({ error: 'Invalid language' });
   try {
-    res.json(await checkEvidence(claimContext(chat, index), language, groq));
+    res.json(await checkEvidence(claimContext(chat, index), language, gemini));
   } catch (error) {
     console.error('Evidence retrieval error:', error);
     res.status(503).json({ error: 'Evidence checking is temporarily unavailable. Please retry.' });
@@ -247,7 +240,7 @@ app.get('/api/summarize', async (req, res) => {
     .join('\n');
 
   try {
-    const response = await groq.chat.completions.create({
+    const response = await gemini.chat.completions.create({
       messages: [
         {
           role: 'system',
@@ -289,7 +282,7 @@ app.post('/api/translate', async (req, res) => {
   }
 
   try {
-    const response = await groq.chat.completions.create({
+    const response = await gemini.chat.completions.create({
       messages: [
         {
           role: 'system',

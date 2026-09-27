@@ -1,3 +1,4 @@
 node_modules
 .env
 chat-and-speech.test.js
+gemini.test.js
