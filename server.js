@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const gemini = new Gemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-2.5-flash', timeout: 30000 });
+const gemini = new Gemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-3.8-flash', timeout: 30000 });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -189,7 +189,13 @@ app.post('/api/tts', async (req, res) => {
     if (!response.ok) {
       const err = await response.text();
       console.error('ElevenLabs API returned error:', err);
-      return res.status(response.status).send(err);
+      let code = '';
+      try { code = JSON.parse(err).detail?.status || ''; } catch (_) {}
+      const error = code === 'quota_exceeded' ? 'ElevenLabs credits exhausted. Check your account quota.'
+        : [401, 403].includes(response.status) ? 'ElevenLabs access denied. Check ELEVENLABS_API_KEY and its permissions on the server.'
+        : response.status === 429 ? 'ElevenLabs rate limit reached. Please retry shortly.'
+        : 'ElevenLabs audio generation failed. Check the server logs for the provider error.';
+      return res.status(response.status).json({ error });
     }
 
     const audioBuffer = await response.arrayBuffer();
@@ -197,7 +203,7 @@ app.post('/api/tts', async (req, res) => {
     res.send(Buffer.from(audioBuffer));
   } catch (err) {
     console.error('TTS server error:', err);
-    res.status(500).send('Audio generation failed');
+    res.status(503).json({ error: 'Audio service could not be reached or timed out. Please retry.' });
   }
 });
 
@@ -215,7 +221,7 @@ app.post('/api/factcheck', async (req, res) => {
     res.json(await checkEvidence(claimContext(chat, index), language, gemini));
   } catch (error) {
     console.error('Evidence retrieval error:', error);
-    res.status(503).json({ error: 'Evidence checking is temporarily unavailable. Please retry.' });
+    res.status(error.status || 503).json({ error: error.publicMessage || 'Evidence retrieval is temporarily unavailable. Please retry.' });
   }
 });
 
@@ -268,7 +274,7 @@ app.get('/api/summarize', async (req, res) => {
     res.json(snapshot);
   } catch (err) {
     console.error('Summarize error:', err);
-    res.status(500).json({ summary: 'Failed to generate civic discourse summary.' });
+    res.status(err.status || 503).json({ error: err.publicMessage || 'Summary generation is temporarily unavailable.' });
   }
 });
 
@@ -299,9 +305,9 @@ app.post('/api/translate', async (req, res) => {
     res.json({ translated });
   } catch (err) {
     console.error('Target translation error:', err);
-    const status = err.status === 429 ? 429 : 503;
+    const status = err.status || 503;
     res.set('Retry-After', '3');
-    res.status(status).json({ error: 'Translation temporarily unavailable' });
+    res.status(status).json({ error: err.publicMessage || 'Translation temporarily unavailable' });
   }
 });
 
