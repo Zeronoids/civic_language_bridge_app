@@ -10,9 +10,10 @@ function claimContext(chat, index) {
   };
 }
 
-async function checkEvidence(context, language, gemini, fetcher = fetch) {
+async function checkEvidence(context, language, groq, fetcher = fetch) {
   const complete = async (system, user) => {
-    const response = await gemini.chat.completions.create({ response_format: { type: 'json_object' }, temperature: 0.1,
+    const response = await groq.chat.completions.create({
+      model: 'qwen/qwen3.8-27b', response_format: { type: 'json_object' }, temperature: 0.1,
       messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(user) }]
     });
     return JSON.parse(response.choices[0].message.content);

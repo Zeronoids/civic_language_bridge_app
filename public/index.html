@@ -288,10 +288,6 @@
 
     socket.on('chat error', message => alert(message));
 
-    async function apiError(response) {
-      const body = await response.json().catch(() => ({}));
-      return new Error(body.error || ('Request failed (HTTP ' + response.status + ').'));
-    }
     const translationCache = new Map();
     let translationQueue = Promise.resolve();
     function translateMessage(text, targetLang, card) {
@@ -313,7 +309,7 @@
             if (translationCache.size > 500) translationCache.delete(translationCache.keys().next().value);
             return json.translated;
           }
-          if (attempt === 2 || (res.status !== 429 && res.status < 500)) throw await apiError(res);
+          if (attempt === 2 || (res.status !== 429 && res.status < 500)) throw new Error('Translation failed');
           const retryAfter = Number(res.headers.get('Retry-After')) || 2 ** (attempt + 1);
           await new Promise(resolve => setTimeout(resolve, Math.min(retryAfter, 30) * 1000));
         }
@@ -388,7 +384,7 @@
             status.textContent = '';
           } catch (error) {
             if (!card.isConnected) return;
-            status.textContent = error.message + ' Showing source text. ';
+            status.textContent = 'Translation unavailable. Showing source text. ';
             const retry = document.createElement('button');
             retry.className = 'btn-action';
             retry.textContent = 'Retry translation';
@@ -439,7 +435,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...reference, targetLang })
         });
-        if (!res.ok) throw await apiError(res);
+        if (!res.ok) throw new Error('Request failed');
         const data = await res.json();
 
         let sourcesHtml = (Array.isArray(data.sources) ? data.sources : []).filter(s => s && /^https?:\/\//i.test(s.url)).map(s =>
@@ -458,7 +454,7 @@
           <details><summary>Read retrieved evidence</summary>${(data.sources || []).map(s => '<p><strong>[' + escapeHtml(s.id) + '] ' + escapeHtml(s.title) + '</strong><br>' + escapeHtml(s.extract || s.snippet) + '</p>').join('')}</details>
         `;
       } catch (err) {
-        box.textContent = err.message;
+        box.innerHTML = '<span style="color: red;">Failed to verify sources.</span>';
       } finally {
         btn.disabled = false;
         btn.innerText = '🔍 Check Evidence';
@@ -513,7 +509,7 @@
 
       try {
         const res = await fetch('/api/summarize?chatId=' + encodeURIComponent(activeChatId));
-        if (!res.ok) throw await apiError(res);
+        if (!res.ok) throw new Error('Request failed');
         const data = await res.json();
         if (requestId !== summaryRequest) return;
         let formatted = escapeHtml(data.summary)
@@ -542,7 +538,7 @@
         }
       } catch (err) {
         if (requestId !== summaryRequest) return;
-        body.textContent = err.message;
+        body.innerHTML = '<span style="color: red;">Error generating summary.</span>';
       }
     }
 
@@ -554,34 +550,35 @@
 
     async function playAudio(text, tone, btn) {
       const originalLabel = btn.innerText;
-      const card = btn.closest('.message-card');
-      let panel = card.querySelector('.audio-panel');
-      if (!panel) { panel = document.createElement('div'); panel.className = 'audio-panel'; card.appendChild(panel); }
-      const previous = panel.querySelector('audio');
-      if (previous) { previous.pause(); URL.revokeObjectURL(previous.src); }
-      panel.textContent = 'Generating audio...';
+
       btn.disabled = true;
-      btn.innerText = 'Preparing audio...';
+      btn.innerText = '⏳ Synthesizing...';
+
       try {
         const res = await fetch('/api/tts', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, tone })
         });
-        if (!res.ok) throw await apiError(res);
+
+        if (!res.ok) throw new Error('Audio generation failed');
+
         const blob = await res.blob();
-        if (!blob.size) throw new Error('Audio service returned an empty recording.');
-        if (!card.isConnected) return;
-        const audio = document.createElement('audio');
-        audio.controls = true;
-        audio.src = URL.createObjectURL(blob);
-        audio.setAttribute('aria-label', 'Listen to this message');
-        panel.replaceChildren(audio);
-        const notice = document.createElement('p'); notice.className = 'quiet'; panel.appendChild(notice);
-        audio.onerror = () => { notice.textContent = 'Your browser could not play this audio.'; };
-        try { await audio.play(); }
-        catch (_) { notice.textContent = 'Audio is ready. Press play below if your browser blocked automatic playback.'; }
-      } catch (error) { panel.textContent = error.message; }
-      finally { btn.disabled = false; btn.innerText = originalLabel; }
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        audio.onended = audio.onerror = () => {
+          URL.revokeObjectURL(audioUrl);
+          btn.disabled = false;
+          btn.innerText = originalLabel;
+        };
+        await audio.play();
+        btn.innerText = '▶ Playing...';
+      } catch (err) {
+        console.error('Audio play error:', err);
+        btn.disabled = false;
+        btn.innerText = '❌ Failed';
+        setTimeout(() => { btn.innerText = originalLabel; }, 2000);
+      }
     }
 
     document.getElementById('summary-modal').addEventListener('click', event => {

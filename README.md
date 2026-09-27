@@ -21,7 +21,7 @@ The responsive interface includes a conversation sidebar, language controls, exp
 
 1. A participant signs in through Auth0 and opens a shared conversation.
 2. Socket.IO sends their message to the Node.js server.
-3. Gemini translates it into English and suggests a tone and emoji. Processing failures fall back to the original text.
+3. Groq translates it into English and suggests a tone and emoji. Processing failures fall back to the original text.
 4. The server saves the message and broadcasts it to participants in that conversation.
 5. Each viewer's browser requests another translation when their selected language is not English.
 
@@ -29,7 +29,7 @@ The submitted wording is preserved as the original. Summaries use the selected c
 
 ## Local setup
 
-You need Node.js with npm, a Gemini API key, an ElevenLabs API key for audio playback, and an Auth0 Single Page Application configured for your URLs.
+You need Node.js with npm, a Groq API key, an ElevenLabs API key for audio playback, and an Auth0 Single Page Application configured for your URLs.
 
 ```sh
 npm install
@@ -38,7 +38,7 @@ npm install
 Copy `.env.example` to `.env` and fill in your keys:
 
 ```dotenv
-GEMINI_API_KEY=your_gemini_key_here
+GROQ_API_KEY=your_groq_key_here
 ELEVENLABS_API_KEY=your_elevenlabs_key_here
 ```
 
@@ -77,7 +77,7 @@ Deploy as an App Platform **Web Service**:
 | HTTP port | `8080` |
 | HTTP health-check path, if enabled | `/` |
 
-Provide `GEMINI_API_KEY` and `ELEVENLABS_API_KEY` as runtime environment variables. The server reads `PORT` from its environment. Add your deployed origin to Auth0's callback URLs, logout URLs, and web origins.
+Provide `GROQ_API_KEY` and `ELEVENLABS_API_KEY` as runtime environment variables. The server reads `PORT` from its environment. Add your deployed origin to Auth0's callback URLs, logout URLs, and web origins.
 
 No frontend compilation is needed. Express serves the files in `public/`.
 
@@ -133,9 +133,6 @@ Feedback ownership uses a random browser token, hashed on the server. It is not 
 
 ### Context-aware evidence checks
 
-Evidence checks read the selected message and up to 12 preceding messages from the same chat, plus its community question. Context helps interpret the claim but is never treated as independent proof. One Gemini call plans up to three targeted searches, then a second assesses up to six Wikipedia references. This uses more tokens than the previous single-call check.
+Evidence checks read the selected message and up to 12 preceding messages from the same chat, plus its community question. Context helps interpret the claim but is never treated as independent proof. One Groq call plans up to three targeted searches, then a second assesses up to six Wikipedia references. This uses more tokens than the previous single-call check.
 
 Assessments preserve qualifiers such as "some" and separate factual support from ambiguous judgments such as "failed". The interface exposes the interpretation, search queries, numbered references, and retrieved excerpts. Retrieval outages show an error rather than judging the claim. Results can still miss evidence; no particular verdict is guaranteed.
-
-
-Gemini uses the native generateContent API through `gemini.js`. Set `GEMINI_API_KEY` locally and in DigitalOcean runtime variables. `GEMINI_MODEL` optionally overrides the default `gemini-3.8-flash`; choose a text model available to your API project that supports JSON output. ElevenLabs remains responsible for audio playback. Node.js 20 or newer is recommended for the built-in fetch transport.
